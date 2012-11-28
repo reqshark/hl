@@ -20,6 +20,7 @@ enum state {
   S_REQ_HT,
   S_REQ_HTT,
   S_REQ_HTTP,
+  S_REQ_HTTP_SLASH,
   S_REQ_VMAJOR,
   S_REQ_VPERIOD,
   S_REQ_VMINOR,
@@ -28,8 +29,10 @@ enum state {
   S_FIELD_START,
   S_FIELD_START_CR,
   S_FIELD,
+  S_FIELD_COLON,
   S_VALUE_START,
   S_VALUE,
+  S_VALUE_CR,
   S_VALUE_CRLF,
   S_BODY_START,
 
@@ -43,6 +46,7 @@ enum state {
 };
 
 void hp2_req_init(hp2_parser* parser) {
+  parser->last_datum = HP2_EAGAIN;
   parser->state = S_METHOD_START;
   parser->version_major = 0;
   parser->version_minor = 0;
@@ -72,7 +76,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
   datum.last = 0;
   datum.partial = 0;
 
-  while (p < end) {
+  for (; p < end; p++) {
     char c = *p;
     switch (parser->state) {
       case S_METHOD_START: {
@@ -164,7 +168,18 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
       case S_REQ_HTTP: {
         assert(datum.type == HP2_EAGAIN);
+        if (c == 'P') {
+          parser->state = S_REQ_HTTP_SLASH;
+        } else {
+          goto error;
+        }
+        break;
+      }
+
+      case S_REQ_HTTP_SLASH: {
         if (c == '/') {
+          parser->version_major = 0;
+          parser->version_minor = 0;
           parser->state = S_REQ_VMAJOR;
         } else {
           goto error;
@@ -261,6 +276,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
               parser->header_state = HS_ANYTHING;
               break;
           }
+          parser->state = S_FIELD;
         }
         break;
       }
@@ -325,19 +341,28 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         }
 
         if (c == ':') {
-          if (parser->match[parser->i] != '\0') {
+          if (parser->header_state != HS_ANYTHING &&
+              parser->match[parser->i] != '\0') {
             parser->header_state = HS_ANYTHING;
           }
 
           datum.end = p;
           assert(datum.partial == 0);
-          parser->state = S_VALUE_START;
+          parser->state = S_FIELD_COLON;
+          p--; /* XXX back up p... */
           goto datum_complete;
         }
 
         if (!IS_FIELD_CHAR(c)) {
           goto error;
         }
+        break;
+      }
+
+      case S_FIELD_COLON: {
+        assert(datum.type == HP2_EAGAIN);
+        if (c != ':') goto error;
+        parser->state = S_VALUE_START;
         break;
       }
 
@@ -351,26 +376,26 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         /* pass-through to S_VALUE */
 
       case S_VALUE: {
-        if (c == '\r') {
+        if (c == '\r' || c == '\n') {
           assert(datum.type == HP2_VALUE);
           datum.end = p;
-          parser->state = S_VALUE_CRLF;
-          goto datum_complete;
-        }
-
-        if (c == '\n') {
-          assert(datum.type == HP2_VALUE);
-          datum.end = p;
-          parser->state = S_FIELD_START;
+          parser->state = c == '\r' ? S_VALUE_CR : S_VALUE_CRLF;
+          p--; /* XXX back up p */
           goto datum_complete;
         }
         break;
       }
 
+      case S_VALUE_CR: {
+        assert(datum.type == HP2_EAGAIN);
+        if (c != '\r') goto error;
+        parser->state = S_VALUE_CRLF;
+        break;
+      }
+
       case S_VALUE_CRLF: {
-        if (c != '\n') {
-          goto error;
-        }
+        assert(datum.type == HP2_EAGAIN);
+        if (c != '\n') goto error;
         parser->state = S_FIELD_START;
         break;
       }

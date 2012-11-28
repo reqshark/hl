@@ -3,7 +3,7 @@
  *
  * HTTP Features Supported:
  * - Full HTTP/1.1.
- * - Keep-Alive. AKA pipe lined messages.
+ * - Keep-Alive. AKA pipelined messages.
  * - Transfer-Encoding: chunked
  * - Custom request method (http-parser had a fixed list of methods).
  * - Trailing headers.
