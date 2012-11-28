@@ -1,4 +1,5 @@
 #include "hp2.h"
+#include "test_data.h"
 
 int main() {
   hp2_parser parser;

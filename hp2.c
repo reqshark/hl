@@ -3,6 +3,14 @@
 #include "hp2.h"
 
 
+#define CONNECTION "connection"
+#define CONTENT_LENGTH "content-length"
+#define TRANSFER_ENCODING "transfer-encoding"
+#define UPGRADE "upgrade"
+#define CHUNKED "chunked"
+#define KEEP_ALIVE "keep-alive"
+#define CLOSE "close"
+
 enum state {
   S_METHOD_START = 0,
   S_METHOD = 1,
@@ -22,7 +30,16 @@ enum state {
   S_FIELD,
   S_VALUE_START,
   S_VALUE,
-  S_BODY_START
+  S_VALUE_CRLF,
+  S_BODY_START,
+
+  HS_ANYTHING,
+  HS_C,
+  HS_CO,
+  HS_CON,
+  HS_MATCHING_CONNECTION,
+  HS_MATCHING_CONTENT_LENGTH,
+  HS_MATCHING_TRANSFER_ENCODING
 };
 
 void hp2_req_init(hp2_parser* parser) {
@@ -35,6 +52,7 @@ void hp2_req_init(hp2_parser* parser) {
 }
 
 
+#define LOWER(c) ((c) | 0x20)
 /* TODO replace with lookup tables. */
 #define IS_LETTER(c) (('a' <= (c) && (c) <= 'z') || ('A' <= (c) && (c) <= 'Z'))
 #define IS_WHITESPACE(c) ((c) == ' ' || (c) == '\n' || (c) == '\r')
@@ -43,15 +61,15 @@ void hp2_req_init(hp2_parser* parser) {
 #define IS_FIELD_CHAR(c) (IS_LETTER(c) || IS_NUMBER(c) || (c) == '-')
 
 
-hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
+hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
   hp2_datum datum;
-  char* p = data;
-  char* end = data + len;
+  const char* p = data;
+  const char* end = data + len;
 
   datum.type = parser->last_datum;
-  datum.start = parser->last_datum == HP2_NONE ? NULL : p;
+  datum.start = parser->last_datum == HP2_EAGAIN ? NULL : p;
   datum.end = NULL;
-  datum.done = 0;
+  datum.last = 0;
   datum.partial = 0;
 
   while (p < end) {
@@ -113,7 +131,7 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
       }
 
       case S_REQ_H: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (c == ' ') {
           ;
         } else if (c == 'H') {
@@ -125,7 +143,7 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
       }
 
       case S_REQ_HT: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (c == 'T') {
           parser->state = S_REQ_HTT;
         } else {
@@ -135,7 +153,7 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
       }
 
       case S_REQ_HTT: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (c == 'T') {
           parser->state = S_REQ_HTTP;
         } else {
@@ -145,7 +163,7 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
       }
 
       case S_REQ_HTTP: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (c == '/') {
           parser->state = S_REQ_VMAJOR;
         } else {
@@ -155,7 +173,7 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
       }
 
       case S_REQ_VMAJOR: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (!IS_NUMBER(c)) {
           goto error;
         }
@@ -165,14 +183,14 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
       }
 
       case S_REQ_VPERIOD: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (c != '.') goto error;
         parser->state = S_REQ_VMINOR;
         break;
       }
 
       case S_REQ_VMINOR: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (!IS_NUMBER(c)) {
           goto error;
         }
@@ -182,7 +200,7 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
       }
 
       case S_REQ_CR: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (c == '\r') {
           parser->state = S_REQ_CRLF;
         } else if (c == '\n') { 
@@ -196,7 +214,7 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
       }
 
       case S_REQ_CRLF: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (c == '\n') {
           parser->state = S_FIELD_START;
         } else {
@@ -206,7 +224,7 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
       }
 
       case S_FIELD_START: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (c == '\r') {
           parser->state = S_FIELD_START_CR;
         } else if (c == '\n') {
@@ -218,18 +236,37 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
         } else if (c == '\t') {
           /* Tabs indicate continued header value */
           assert(0 && "Implement me");
+          goto error;
         } else if (c == ' ') {
           ;
         } else if (IS_FIELD_CHAR(c)) {
           datum.type = HP2_FIELD;
           datum.start = p;
-          parser->state = S_FIELD;
+          /* We need to read a couple of the headers. In particular
+           * Content-Length, Connection, and Transfer-Encoding.
+           */
+          c = LOWER(c);
+          switch (c) { 
+            case 'c':
+              parser->header_state = HS_CO;
+              break;
+
+            case 't':
+              parser->header_state = HS_MATCHING_TRANSFER_ENCODING;
+              parser->match = TRANSFER_ENCODING;
+              parser->i = 0;
+              break;
+
+            default:
+              parser->header_state = HS_ANYTHING;
+              break;
+          }
         }
         break;
       }
 
       case S_FIELD_START_CR: {
-        assert(datum.type == HP2_NONE);
+        assert(datum.type == HP2_EAGAIN);
         if (c == '\n') {
           datum.type = HP2_HEADERS_COMPLETE;
           datum.end = p + 1;
@@ -244,7 +281,54 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
 
       case S_FIELD: {
         assert(datum.type == HP2_FIELD);
+
+        if (parser->header_state != HS_ANYTHING) {
+          c = LOWER(c);
+          switch (parser->header_state) {
+            case HS_C: {
+              parser->header_state = c == 'o'? HS_CO : HS_ANYTHING;
+              break;
+            }
+
+            case HS_CO: {
+              parser->header_state = c == 'n'? HS_CON : HS_ANYTHING;
+              break;
+            }
+
+            case HS_CON: {
+              if (c == 't') {
+                parser->header_state = HS_MATCHING_CONTENT_LENGTH;
+                parser->match = CONTENT_LENGTH;
+                parser->i = 4;
+              } else if (c == 'n') {
+                parser->header_state = HS_MATCHING_CONNECTION;
+                parser->match = CONNECTION;
+                parser->i = 4;
+              } else {
+                parser->header_state = HS_ANYTHING;
+              }
+              break;
+            }
+
+            case HS_MATCHING_CONTENT_LENGTH:
+            case HS_MATCHING_CONNECTION:
+            case HS_MATCHING_TRANSFER_ENCODING:
+              if (parser->match[parser->i++] != c) {
+                parser->header_state = HS_ANYTHING;
+              }
+              break;
+
+            default:
+              assert(0);
+              goto error;
+          }
+        }
+
         if (c == ':') {
+          if (parser->match[parser->i] != '\0') {
+            parser->header_state = HS_ANYTHING;
+          }
+
           datum.end = p;
           assert(datum.partial == 0);
           parser->state = S_VALUE_START;
@@ -257,7 +341,43 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
         break;
       }
 
+      case S_VALUE_START:
+        /* Skip spaces at the beginning of values */
+        if (c == ' ') break;
+        assert(datum.type == HP2_EAGAIN);
+        datum.type = HP2_VALUE;
+        datum.start = p;
+        parser->state = S_VALUE;
+        /* pass-through to S_VALUE */
 
+      case S_VALUE: {
+        if (c == '\r') {
+          assert(datum.type == HP2_VALUE);
+          datum.end = p;
+          parser->state = S_VALUE_CRLF;
+          goto datum_complete;
+        }
+
+        if (c == '\n') {
+          assert(datum.type == HP2_VALUE);
+          datum.end = p;
+          parser->state = S_FIELD_START;
+          goto datum_complete;
+        }
+        break;
+      }
+
+      case S_VALUE_CRLF: {
+        if (c != '\n') {
+          goto error;
+        }
+        parser->state = S_FIELD_START;
+        break;
+      }
+
+      case S_BODY_START: {
+        break;
+      }
 
     }
   }
@@ -270,12 +390,12 @@ hp2_datum hp2_parse(hp2_parser* parser, char* data, size_t len) {
 datum_complete:
   assert(datum.partial == 0);
   assert(datum.end);
-  parser->last_datum = HP2_NONE;
+  parser->last_datum = HP2_EAGAIN;
   return datum;
 
 error:
   datum.type = HP2_ERROR;
-  datum.done = 1;
+  datum.last = 1;
   datum.end = p;
   return datum;
 }
