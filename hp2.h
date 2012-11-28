@@ -36,15 +36,14 @@ enum hp2_datum_type {
 typedef struct {
   enum hp2_datum_type type;
 
-  /* If set to 1, close the connection. Do not call hp2_parse again. */
-  short last;
+  /* If last is non-zero, close the connection. Do not call hp2_parse again. */
+  char last;
 
-  /* If partial is 1, the next datum will be of the same type. This can happen
-   * in the case that a string is split over multiple packets.
-   * Used for HP2_METHOD, HP2_REASON, HP2_URL, HP2_FIELD,
-   * HP2_VALUE, HP2_BODY
+  /* If partial is non-zero, the next datum will be of the same type. This can
+   * happen in the case that a string is split over multiple packets. Used for
+   * HP2_METHOD, HP2_REASON, HP2_URL, HP2_FIELD, HP2_VALUE, HP2_BODY.
    */
-  short partial;
+  char partial;
 
   /* Used for HP2_METHOD, HP2_REASON, HP2_URL, HP2_FIELD,
    * HP2_VALUE, HP2_BODY. Otherwise NULL.
@@ -58,16 +57,17 @@ typedef struct {
 typedef struct {
   /* private */
   enum hp2_datum_type last_datum;
-  short state;
-  short header_state;
-  short i;
+  unsigned char state;
+  unsigned char header_state;
+  unsigned char i;
   const char* match;
 
   /* read-only */
   /* These values should be copied out the struct on HP2_HEADERS_COMPLETE. */
-  unsigned short version_major;
-  unsigned short version_minor;
-  short upgrade; /* 1 means that HTTP ends. Do not call hp2_parse() again. */
+  unsigned char version_major;
+  unsigned char version_minor;
+  size_t body_read;
+  char upgrade; /* 1 means that HTTP ends. Do not call hp2_parse() again. */
   ssize_t content_length; /* -1 means unknown body length */
   unsigned int code; /* responses only. E.G. 200, 404. */
 } hp2_parser;

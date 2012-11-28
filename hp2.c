@@ -51,7 +51,8 @@ void hp2_req_init(hp2_parser* parser) {
   parser->version_major = 0;
   parser->version_minor = 0;
   parser->upgrade = 0;
-  parser->content_length = -1;
+  parser->content_length = 0;
+  parser->body_read = 0;
   parser->code = 0;
 }
 
@@ -63,6 +64,19 @@ void hp2_req_init(hp2_parser* parser) {
 #define IS_NUMBER(c) ('0' <= (c) && (c) <= '9')
 #define IS_URL_CHAR(c) (IS_LETTER(c) || (c) == '/' || (c) == ':' || IS_NUMBER(c))
 #define IS_FIELD_CHAR(c) (IS_LETTER(c) || IS_NUMBER(c) || (c) == '-')
+
+
+static void headers_complete(hp2_parser* parser,
+                             const char* p,
+                             hp2_datum* datum) {
+  assert(datum->start == NULL);
+  datum->type = HP2_HEADERS_COMPLETE;
+  datum->last = datum->partial = 0;
+  datum->end = p + 1;
+  parser->state = S_BODY_START;
+
+  parser->body_read = 0;
+}
 
 
 hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
@@ -243,10 +257,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         if (c == '\r') {
           parser->state = S_FIELD_START_CR;
         } else if (c == '\n') {
-          datum.type = HP2_HEADERS_COMPLETE;
-          datum.end = p + 1;
-          assert(datum.start == NULL);
-          parser->state = S_BODY_START;
+          headers_complete(parser, p, &datum);
           goto datum_complete;
         } else if (c == '\t') {
           /* Tabs indicate continued header value */
@@ -284,10 +295,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_FIELD_START_CR: {
         assert(datum.type == HP2_EAGAIN);
         if (c == '\n') {
-          datum.type = HP2_HEADERS_COMPLETE;
-          datum.end = p + 1;
-          assert(datum.start == NULL);
-          parser->state = S_BODY_START;
+          headers_complete(parser, p, &datum);
           goto datum_complete;
         } else {
           goto error;
@@ -401,6 +409,13 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_BODY_START: {
+        if (parser->body_read == parser->content_length) {
+          datum.type = HP2_MSG_COMPLETE;
+          datum.end = p;
+          parser->state = S_METHOD_START;
+          goto datum_complete;
+        }
+        assert(0 && "implement me");
         break;
       }
 
