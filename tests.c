@@ -24,9 +24,13 @@ void expect_eq(const char* expected, hp2_datum datum) {
 
 void test_req(const struct message* req) {
   const char* buf = req->raw;
-  int raw_len =  strlen(req->raw);
+  int raw_len = strlen(req->raw);
   int len = raw_len;
   int num_headers = 0;
+  int body_len = strlen(req->body);
+  char* body = malloc(body_len);
+  int body_read = 0;
+  int chunk_len;
 
   hp2_parser parser;
   hp2_req_init(&parser);
@@ -70,16 +74,40 @@ void test_req(const struct message* req) {
     num_headers++;
   }
 
-  if (parser.content_length == 0) {
-    /* We're done. There is no body. The datum is HP2_MSG_COMPLETE. */
-    assert(d.type == HP2_MSG_COMPLETE);
+  /* We're done. There is no body. The datum is HP2_MSG_COMPLETE. */
+  if (parser.content_length == 0) goto msg_complete;
+
+  assert(d.type == HP2_HEADERS_COMPLETE);
+  assert(d.partial == 0);
+  assert(d.last == 0);
+  assert(d.start == NULL);
+
+  /* Now read the body */
+  for (;;) {
+    len -= d.end - buf;
+    buf = d.end;
+    d = hp2_parse(&parser, buf, len);
+
+    if (d.type != HP2_BODY) break;
+
+    assert(d.type == HP2_BODY);
     assert(d.partial == 0);
     assert(d.last == 0);
-    assert(d.start == NULL);
-    return;
+
+    chunk_len = d.end - d.start;
+    memcpy(body + body_read, d.start, chunk_len);
+    body_read += chunk_len;
   }
 
+msg_complete:
+  assert(body_len == body_read);
+  assert(strcmp(body, req->body) == 0);
+  printf("bodys match. body_len = %d\n", body_len);
 
+  assert(d.type == HP2_MSG_COMPLETE);
+  assert(d.partial == 0);
+  assert(d.last == 0);
+  assert(d.start == NULL);
 }
 
 
@@ -193,7 +221,7 @@ int main() {
   manual_test_CURL_GET();
 
   for (i = 0; requests[i].name; i++) {
-    printf("test_req(%s)\n", requests[i].name);
+    printf("test_req(%d, %s)\n", i, requests[i].name);
     test_req(&requests[i]);
   }
 

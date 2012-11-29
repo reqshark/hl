@@ -14,10 +14,11 @@
  * - Streaming bodies.
  *
  * Not supported:
+ * - headers split over multiple lines (with leading tabs)
  * - The key/value pairs attached to body chunks in chunked encoding. (Don't
  *   worry, no software on earth uses this. I want to keep it that way.)
- *
- * */
+ */
+
 #ifndef HP2_H
 #define HP2_H
 

@@ -548,6 +548,7 @@ const struct message requests[] =
   ,.body= ""
   }
 
+#if 0
 #define LINE_FOLDING_IN_HEADER 21
 , {.name= "line folding in header value"
   ,.raw= "GET / HTTP/1.1\r\n"
@@ -574,6 +575,7 @@ const struct message requests[] =
              }
   ,.body= ""
   }
+#endif
 
 
 #define QUERY_TERMINATED_HOST 22

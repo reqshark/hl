@@ -3,9 +3,9 @@
 #include "hp2.h"
 
 enum state {
-  S_METHOD_START = 0,
-  S_METHOD = 1,
-  S_URL_START = 2,
+  S_METHOD_START,
+  S_METHOD,
+  S_URL_START,
   S_URL,
   S_REQ_H,
   S_REQ_HT,
@@ -31,11 +31,11 @@ enum state {
   HS_C,
   HS_CO,
   HS_CON,
-  HS_MATCHING_CONNECTION,
-  HS_MATCHING_CONTENT_LENGTH,
-  HS_MATCHING_TRANSFER_ENCODING,
-  HS_MATCHING_KEEP_ALIVE,
-  HS_MATCHING_CLOSE
+  HS_MATCH_CONNECTION,
+  HS_MATCH_CONTENT_LENGTH,
+  HS_MATCH_TRANSFER_ENCODING,
+  HS_MATCH_KEEP_ALIVE,
+  HS_MATCH_CLOSE
 };
 
 void hp2_req_init(hp2_parser* parser) {
@@ -60,7 +60,7 @@ void hp2_req_init(hp2_parser* parser) {
 #define IS_FIELD_CHAR(c) (IS_LETTER(c) || IS_NUMBER(c) || (c) == '-')
 
 
-const int is_url_char[] = {
+const char is_url_char[] = {
   /*  NUL SOH STX ETX EOT ENQ ACK \a \b \t \n \v \f \r SO SI  */
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   /*  DLE DC1 DC2 DC3 DC4 NAK SYN ETB CAN EM SUB ESC FS GS RS US  */
@@ -77,7 +77,7 @@ const int is_url_char[] = {
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   /*  p q r s t u v w x y z { | } ~ DEL */
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0,
-  /* If the 7-bit is set then it's a utf8 char. Accepted. */
+  /* If the 7th bit is set, then it's part of a UTF8 char. Accepted. */
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -175,28 +175,10 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_URL: {
         assert(datum.type == HP2_URL);
 
-        if (IS_URL_CHAR(c)) {
-          break;
-        }
-
-        if (c == ' ' || c == '\r' || c == '\n') {
+        if (!IS_URL_CHAR(c)) {
           datum.end = head;
-          switch (c) {
-            case ' ':
-              parser->state = S_REQ_H;
-              break;
-
-            case '\r':
-              parser->state = S_REQ_CRLF;
-              break;
-
-            case '\n':
-              parser->state = S_FIELD_START;
-              break;
-          }
+          parser->state = S_REQ_H;
           goto datum_complete;
-        } else {
-          goto error;
         }
         break;
       }
@@ -207,6 +189,10 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
           ;
         } else if (c == 'H') {
           parser->state = S_REQ_HT;
+        } else if (c == '\r') {
+          parser->state = S_REQ_CRLF;
+        } else if (c == '\n') {
+          parser->state = S_FIELD_START;
         } else {
           goto error;
         }
@@ -331,7 +317,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
               break;
 
             case 't':
-              parser->header_state = HS_MATCHING_TRANSFER_ENCODING;
+              parser->header_state = HS_MATCH_TRANSFER_ENCODING;
               parser->match = TRANSFER_ENCODING;
               parser->i = 0;
               break;
@@ -374,11 +360,11 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
             case HS_CON: {
               if (c == 't') {
-                parser->header_state = HS_MATCHING_CONTENT_LENGTH;
+                parser->header_state = HS_MATCH_CONTENT_LENGTH;
                 parser->match = CONTENT_LENGTH;
                 parser->i = 4;
               } else if (c == 'n') {
-                parser->header_state = HS_MATCHING_CONNECTION;
+                parser->header_state = HS_MATCH_CONNECTION;
                 parser->match = CONNECTION;
                 parser->i = 4;
               } else {
@@ -387,9 +373,9 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
               break;
             }
 
-            case HS_MATCHING_CONTENT_LENGTH:
-            case HS_MATCHING_CONNECTION:
-            case HS_MATCHING_TRANSFER_ENCODING:
+            case HS_MATCH_CONTENT_LENGTH:
+            case HS_MATCH_CONNECTION:
+            case HS_MATCH_TRANSFER_ENCODING:
               if (parser->match[parser->i++] != c) {
                 parser->header_state = HS_ANYTHING;
               }
@@ -437,19 +423,19 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
 
         switch (parser->header_state) {
-          case HS_MATCHING_CONTENT_LENGTH: {
+          case HS_MATCH_CONTENT_LENGTH: {
             parser->content_length = 0;
             break;
           }
 
-          case HS_MATCHING_CONNECTION: {
+          case HS_MATCH_CONNECTION: {
             c = LOWER(c);
             if (c == 'k') {
-              parser->header_state = HS_MATCHING_KEEP_ALIVE;
+              parser->header_state = HS_MATCH_KEEP_ALIVE;
               parser->match = KEEP_ALIVE;
               parser->i = 0;
             } else if (c == 'c') {
-              parser->header_state = HS_MATCHING_CLOSE;
+              parser->header_state = HS_MATCH_CLOSE;
               parser->match = CLOSE;
               parser->i = 0;
             } else {
@@ -458,7 +444,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             break;
           }
 
-          case HS_MATCHING_TRANSFER_ENCODING: {
+          case HS_MATCH_TRANSFER_ENCODING: {
             parser->match = CHUNKED;
             parser->i = 0;
             break;
@@ -484,16 +470,16 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         if (parser->header_state != HS_ANYTHING) {
           c = LOWER(c);
           switch (parser->header_state) {
-            case HS_MATCHING_CONTENT_LENGTH: {
+            case HS_MATCH_CONTENT_LENGTH: {
               if (!IS_NUMBER(c)) goto error;
               parser->content_length *= 10;
               parser->content_length += c - '0';
               break;
             }
 
-            case HS_MATCHING_KEEP_ALIVE:
-            case HS_MATCHING_CLOSE:
-            case HS_MATCHING_TRANSFER_ENCODING: {
+            case HS_MATCH_KEEP_ALIVE:
+            case HS_MATCH_CLOSE:
+            case HS_MATCH_TRANSFER_ENCODING: {
               if (parser->match[parser->i++] != c) {
                 parser->header_state = HS_ANYTHING;
               }
