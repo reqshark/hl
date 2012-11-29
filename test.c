@@ -30,10 +30,20 @@ void test_req(const struct message* req) {
   hp2_parser parser;
   hp2_req_init(&parser);
 
-  while (len > 0) {
-    hp2_datum d = hp2_parse(&parser, buf, len);
+  hp2_datum d = hp2_parse(&parser, buf, len);
+  assert(d.type == HP2_METHOD);
+  assert(d.partial == 0);
+  assert(d.last == 0);
+  expect_eq(req->method, d);
 
-  }
+  len -= d.end - buf;
+  buf = d.end;
+  d = hp2_parse(&parser, buf, len);
+  assert(d.type == HP2_URL);
+  assert(d.partial == 0);
+  assert(d.last == 0);
+  expect_eq(req->request_url, d);
+
 }
 
 
@@ -139,9 +149,17 @@ void manual_test_CURL_GET() {
 
 
 int main() {
+  int i;
+
   printf("sizeof(hp2_datum) = %d\n", (int)sizeof(hp2_datum));
   printf("sizeof(hp2_parser) = %d\n", (int)sizeof(hp2_parser));
+
   manual_test_CURL_GET();
-  //test_req(&requests[CURL_GET]);
+  
+  for (i = 0; requests[i].name; i++) {
+    printf("test_req(%s)\n", requests[i].name);
+    test_req(&requests[i]);
+  }
+
   return 0;
 }

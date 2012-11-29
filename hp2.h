@@ -1,5 +1,9 @@
 /* hp2 = HTTP Parser 2
- * No syscalls, no allocations, pure computation, No callbacks.
+ * No syscalls - pure computation. Supports all platforms with minimal effort.
+ * No allocations - you own all the memory.
+ * No callbacks. Simplier interface.
+ * Supports both request and response parsing.
+ *
  *
  * HTTP Features Supported:
  * - Full HTTP/1.1.
@@ -27,7 +31,7 @@ enum hp2_datum_type {
   HP2_URL, /* Request URL, E.G. "/favicon.ico" */
   HP2_FIELD,
   HP2_VALUE,
-  HP2_HEADERS_COMPLETE,
+  HP2_HEADERS_COMPLETE, /* Only returned if body is non-zero */
   HP2_BODY, /* Many HP2_BODY chunks may appear in a row */
   HP2_MSG_COMPLETE,
   HP2_ERROR /* Bad HTTP. Close the connection. */
@@ -36,7 +40,18 @@ enum hp2_datum_type {
 typedef struct {
   enum hp2_datum_type type;
 
-  /* If last is non-zero, close the connection. Do not call hp2_parse again. */
+  /* start, end delimit the data - like a string. But not all datums are
+   * strings; some are just points, like HP2_MSG_START, HP2_HEADERS_COMPLETE,
+   * HP2_MSG_COMPLETE, and HP2_ERROR. They will have both a start and an end.
+   * string datums: HP2_METHOD, HP2_REASON, HP2_URL, HP2_FIELD, HP2_VALUE,
+   * HP2_BODY.
+   */
+  const char* start;
+  const char* end;
+
+  /* If datum.last is non-zero, close the connection and do not call hp2_parse()
+   * again.
+   */
   char last;
 
   /* If partial is non-zero, the next datum will be of the same type. This can
@@ -44,14 +59,6 @@ typedef struct {
    * HP2_METHOD, HP2_REASON, HP2_URL, HP2_FIELD, HP2_VALUE, HP2_BODY.
    */
   char partial;
-
-  /* Used for HP2_METHOD, HP2_REASON, HP2_URL, HP2_FIELD,
-   * HP2_VALUE, HP2_BODY. Otherwise NULL.
-   */
-  const char* start; 
-
-  /* Call hp2_parse() again starting here if last is 0. */
-  const char* end;
 } hp2_datum;
 
 typedef struct {

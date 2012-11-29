@@ -64,12 +64,43 @@ void hp2_req_init(hp2_parser* parser) {
 #define IS_LETTER(c) (('a' <= (c) && (c) <= 'z') || ('A' <= (c) && (c) <= 'Z'))
 #define IS_WHITESPACE(c) ((c) == ' ' || (c) == '\n' || (c) == '\r')
 #define IS_NUMBER(c) ('0' <= (c) && (c) <= '9')
-#define IS_URL_CHAR(c) (IS_LETTER(c) || (c) == '/' || (c) == ':' || IS_NUMBER(c))
+#define IS_URL_CHAR(c) is_url_char[(unsigned char)c]
+#define IS_METHOD_CHAR(c) (IS_LETTER(c) || c == '-')
 #define IS_FIELD_CHAR(c) (IS_LETTER(c) || IS_NUMBER(c) || (c) == '-')
 
 
+const int is_url_char[] = {
+  /*  NUL SOH STX ETX EOT ENQ ACK \a \b \t \n \v \f \r SO SI  */
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  /*  DLE DC1 DC2 DC3 DC4 NAK SYN ETB CAN EM SUB ESC FS GS RS US  */
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  /*  SPACE ! " # $ % & ´ ( ) * + , - . /  */
+  0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1,
+  /*  0 1 2 3 4 5 6 7 8 9 : ; < = > ?  */
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  /*  @ A B C D E F G H I J K L M N O  */
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  /*  P Q R S T U V W X Y Z [ \ ] ^ _  */
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  /*  ` a b c d e f g h i j k l m n o  */
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  /*  p q r s t u v w x y z { | } ~ DEL */
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0,
+  /* If the 7-bit is set then it's a utf8 char. Accepted. */
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+};
+
+
+
 static void headers_complete(hp2_parser* parser,
-                             const char* p,
+                             const char* head,
                              hp2_datum* datum) {
   assert(datum->start == NULL);
 
@@ -83,7 +114,7 @@ static void headers_complete(hp2_parser* parser,
     datum->type = HP2_HEADERS_COMPLETE;
   }
   datum->last = datum->partial = 0;
-  datum->end = p + 1;
+  datum->end = head + 1;
   parser->state = S_BODY_START;
 
   parser->body_read = 0;
@@ -91,22 +122,22 @@ static void headers_complete(hp2_parser* parser,
 
 
 hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
-  hp2_datum datum;
-  const char* p = data;
+  hp2_datum datum; /* returned datum */
+  const char* head; /* parser head */
   const char* end = data + len;
 
   datum.type = parser->last_datum;
-  datum.start = parser->last_datum == HP2_EAGAIN ? NULL : p;
+  datum.start = parser->last_datum == HP2_EAGAIN ? NULL : data;
   datum.end = NULL;
   datum.last = 0;
   datum.partial = 0;
 
-  for (; p < end; p++) {
-    char c = *p;
+  for (head = data; head < end; head++) {
+    char c = *head;
     switch (parser->state) {
       case S_METHOD_START: {
-        if (IS_LETTER(c)) {
-          datum.start = p;
+        if (IS_METHOD_CHAR(c)) {
+          datum.start = head;
           datum.type = HP2_METHOD;
           parser->state = S_METHOD;
         } else if (!IS_WHITESPACE(c)) {
@@ -118,12 +149,12 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_METHOD: {
         if (c == ' ') {
           assert(datum.type == HP2_METHOD);
-          datum.end = p;
+          datum.end = head;
           parser->state = S_URL_START;
           goto datum_complete;
         }
 
-        if (!IS_LETTER(c)) {
+        if (!IS_METHOD_CHAR(c)) {
           goto error;
         }
         break;
@@ -136,7 +167,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
           }
 
           datum.type = HP2_URL;
-          datum.start = p;
+          datum.start = head;
           parser->state = S_URL;
         }
         break;
@@ -145,13 +176,27 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_URL: {
         assert(datum.type == HP2_URL);
 
-        if (c == ' ') {
-          datum.end = p;
-          parser->state = S_REQ_H;
-          goto datum_complete;
+        if (IS_URL_CHAR(c)) {
+          break;
         }
 
-        if (!IS_URL_CHAR(c)) {
+        if (c == ' ' || c == '\r' || c == '\n') {
+          datum.end = head;
+          switch (c) { 
+            case ' ': 
+              parser->state = S_REQ_H;
+              break;
+
+            case '\r':
+              parser->state = S_REQ_CRLF;
+              break;
+
+            case '\n':
+              parser->state = S_FIELD_START;
+              break;
+          }
+          goto datum_complete;
+        } else {
           goto error;
         }
         break;
@@ -266,7 +311,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         if (c == '\r') {
           parser->state = S_FIELD_START_CR;
         } else if (c == '\n') {
-          headers_complete(parser, p, &datum);
+          headers_complete(parser, head, &datum);
           goto datum_complete;
         } else if (c == '\t') {
           /* Tabs indicate continued header value */
@@ -276,7 +321,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
           ;
         } else if (IS_FIELD_CHAR(c)) {
           datum.type = HP2_FIELD;
-          datum.start = p;
+          datum.start = head;
           /* We need to read a couple of the headers. In particular
            * Content-Length, Connection, and Transfer-Encoding.
            */
@@ -304,7 +349,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_FIELD_START_CR: {
         assert(datum.type == HP2_EAGAIN);
         if (c == '\n') {
-          headers_complete(parser, p, &datum);
+          headers_complete(parser, head, &datum);
           goto datum_complete;
         } else {
           goto error;
@@ -363,10 +408,10 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             parser->header_state = HS_ANYTHING;
           }
 
-          datum.end = p;
+          datum.end = head;
           assert(datum.partial == 0);
           parser->state = S_FIELD_COLON;
-          p--; /* XXX back up p... */
+          head--; /* XXX back up head... */
           goto datum_complete;
         }
 
@@ -388,7 +433,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         if (c == ' ') break;
         assert(datum.type == HP2_EAGAIN);
         datum.type = HP2_VALUE;
-        datum.start = p;
+        datum.start = head;
         parser->state = S_VALUE;
 
 
@@ -431,9 +476,9 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_VALUE: {
         if (c == '\r' || c == '\n') {
           assert(datum.type == HP2_VALUE);
-          datum.end = p;
+          datum.end = head;
           parser->state = c == '\r' ? S_VALUE_CR : S_VALUE_CRLF;
-          p--; /* XXX back up p */
+          head--; /* XXX back up head */
           goto datum_complete;
         }
 
@@ -480,7 +525,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_BODY_START: {
         if (parser->content_length == 0) {
           datum.type = HP2_MSG_COMPLETE;
-          datum.end = p;
+          datum.end = head;
           parser->state = S_METHOD_START;
           goto datum_complete;
         }
@@ -490,7 +535,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
     }
   }
 
-  datum.end = p;
+  datum.end = head;
   datum.partial = 1;
   parser->last_datum = datum.type;
   return datum;
@@ -504,6 +549,7 @@ datum_complete:
 error:
   datum.type = HP2_ERROR;
   datum.last = 1;
-  datum.end = p;
+  datum.start = NULL;
+  datum.end = head;
   return datum;
 }
