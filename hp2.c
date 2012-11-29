@@ -2,15 +2,6 @@
 #include <assert.h>
 #include "hp2.h"
 
-
-#define CONNECTION "connection"
-#define CONTENT_LENGTH "content-length"
-#define TRANSFER_ENCODING "transfer-encoding"
-#define UPGRADE "upgrade"
-#define CHUNKED "chunked"
-#define KEEP_ALIVE "keep-alive"
-#define CLOSE "close"
-
 enum state {
   S_METHOD_START = 0,
   S_METHOD = 1,
@@ -96,6 +87,14 @@ const int is_url_char[] = {
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
 };
+
+#define CONNECTION "connection"
+#define CONTENT_LENGTH "content-length"
+#define TRANSFER_ENCODING "transfer-encoding"
+#define UPGRADE "upgrade"
+#define CHUNKED "chunked"
+#define KEEP_ALIVE "keep-alive"
+#define CLOSE "close"
 
 
 

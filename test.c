@@ -26,6 +26,7 @@ void test_req(const struct message* req) {
   const char* buf = req->raw;
   int raw_len =  strlen(req->raw);
   int len = raw_len;
+  int num_headers = 0;
 
   hp2_parser parser;
   hp2_req_init(&parser);
@@ -43,6 +44,41 @@ void test_req(const struct message* req) {
   assert(d.partial == 0);
   assert(d.last == 0);
   expect_eq(req->request_url, d);
+
+  for (;;) {
+    /* field */
+    len -= d.end - buf;
+    buf = d.end;
+    d = hp2_parse(&parser, buf, len);
+
+    if (d.type != HP2_FIELD) break;
+
+    assert(d.type == HP2_FIELD);
+    assert(d.partial == 0);
+    assert(d.last == 0);
+    expect_eq(req->headers[num_headers][0], d);
+
+    /* value */
+    len -= d.end - buf;
+    buf = d.end;
+    d = hp2_parse(&parser, buf, len);
+    assert(d.type == HP2_VALUE);
+    assert(d.partial == 0);
+    assert(d.last == 0);
+    expect_eq(req->headers[num_headers][1], d);
+
+    num_headers++;
+  }
+
+  if (parser.content_length == 0) {
+    /* We're done. There is no body. The datum is HP2_MSG_COMPLETE. */
+    assert(d.type == HP2_MSG_COMPLETE);
+    assert(d.partial == 0);
+    assert(d.last == 0);
+    assert(d.start == NULL);
+    return;
+  }
+
 
 }
 

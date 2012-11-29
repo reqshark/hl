@@ -1,5 +1,5 @@
 /* hp2 = HTTP Parser 2
- * No syscalls - pure computation. Supports all platforms with minimal effort.
+ * No syscalls - pure computation. Does not depend on libc.
  * No allocations - you own all the memory.
  * No callbacks. Simplier interface.
  * Supports both request and response parsing.
