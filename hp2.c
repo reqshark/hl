@@ -42,7 +42,9 @@ enum state {
   HS_CON,
   HS_MATCHING_CONNECTION,
   HS_MATCHING_CONTENT_LENGTH,
-  HS_MATCHING_TRANSFER_ENCODING
+  HS_MATCHING_TRANSFER_ENCODING,
+  HS_MATCHING_KEEP_ALIVE,
+  HS_MATCHING_CLOSE
 };
 
 void hp2_req_init(hp2_parser* parser) {
@@ -70,7 +72,16 @@ static void headers_complete(hp2_parser* parser,
                              const char* p,
                              hp2_datum* datum) {
   assert(datum->start == NULL);
-  datum->type = HP2_HEADERS_COMPLETE;
+
+  /* If the message has zero length, don't emit the HP2_HEADERS_COMPLETE datum,
+   * just do HP2_MSG_COMPLETE.
+   */
+  if (parser->content_length == 0) {
+    datum->type = HP2_MSG_COMPLETE;
+  } else {
+    assert(0 && "implement me");
+    datum->type = HP2_HEADERS_COMPLETE;
+  }
   datum->last = datum->partial = 0;
   datum->end = p + 1;
   parser->state = S_BODY_START;
@@ -119,17 +130,15 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_URL_START: {
-        if (c == ' ') {
-          continue;
-        }
+        if (c != ' ') {
+          if (!IS_URL_CHAR(c)) {
+            goto error;
+          }
 
-        if (!IS_URL_CHAR(c)) {
-          goto error;
+          datum.type = HP2_URL;
+          datum.start = p;
+          parser->state = S_URL;
         }
-
-        datum.type = HP2_URL;
-        datum.start = p;
-        parser->state = S_URL;
         break;
       }
 
@@ -381,6 +390,42 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         datum.type = HP2_VALUE;
         datum.start = p;
         parser->state = S_VALUE;
+
+
+        switch (parser->header_state) { 
+          case HS_MATCHING_CONTENT_LENGTH: {
+            parser->content_length = 0;
+            break;
+          }
+
+          case HS_MATCHING_CONNECTION: {
+            c = LOWER(c);
+            if (c == 'k') {
+              parser->header_state = HS_MATCHING_KEEP_ALIVE;
+              parser->match = KEEP_ALIVE;
+              parser->i = 0;
+            } else if (c == 'c') {
+              parser->header_state = HS_MATCHING_CLOSE;
+              parser->match = CLOSE;
+              parser->i = 0;
+            } else {
+              parser->header_state = HS_ANYTHING;
+            }
+            break;
+          }
+          
+          case HS_MATCHING_TRANSFER_ENCODING: {
+            parser->match = CHUNKED;
+            parser->i = 0;
+            break;
+          }
+
+          case HS_ANYTHING:
+            break;
+
+          default:
+            assert(0 && "should not reach here");
+        }
         /* pass-through to S_VALUE */
 
       case S_VALUE: {
@@ -390,6 +435,30 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
           parser->state = c == '\r' ? S_VALUE_CR : S_VALUE_CRLF;
           p--; /* XXX back up p */
           goto datum_complete;
+        }
+
+        if (parser->header_state != HS_ANYTHING) {
+          c = LOWER(c);
+          switch (parser->header_state) {
+            case HS_MATCHING_CONTENT_LENGTH: {
+              if (!IS_NUMBER(c)) goto error;
+              parser->content_length *= 10;
+              parser->content_length += c - '0';
+              break;
+            }
+
+            case HS_MATCHING_KEEP_ALIVE:
+            case HS_MATCHING_CLOSE:
+            case HS_MATCHING_TRANSFER_ENCODING: {
+              if (parser->match[parser->i++] != c) {
+                parser->header_state = HS_ANYTHING;
+              }
+              break;
+            }
+
+            default:
+              assert(0 && "should not reach here");
+          }
         }
         break;
       }
@@ -409,7 +478,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_BODY_START: {
-        if (parser->body_read == parser->content_length) {
+        if (parser->content_length == 0) {
           datum.type = HP2_MSG_COMPLETE;
           datum.end = p;
           parser->state = S_METHOD_START;
@@ -418,7 +487,6 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         assert(0 && "implement me");
         break;
       }
-
     }
   }
 
