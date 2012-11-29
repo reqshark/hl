@@ -87,13 +87,13 @@ void hp2_req_init(hp2_parser* parser);
  *
  * The hp2_parse() will parse until it has one datum and then return it.
  *
- * The parser must be restarted on datum.end.
- * 
- * If datum.last is 1, then you shouldn't continue to call hp2_parse().  You
- * should stop reading from the TCP socket when datum.last is 1. 
+ * The parser must be restarted with buf = datum.end.
  *
- * If datum.type == HP2_EAGAIN, the parser has completed parsing buf
- * and needs new input. (Supplied by your next call to recv(2).)
+ * If datum.last is 1, then you shouldn't continue to call hp2_parse(). You
+ * should also stop reading from the TCP socket.last is 1.
+ *
+ * If datum.type == HP2_EAGAIN, the parser has completed parsing buf and needs
+ * new input. (Supplied by your next call to recv(2).)
  */
 hp2_datum hp2_parse(hp2_parser* parser, const char* buf, size_t buflen);
 

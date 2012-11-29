@@ -58,7 +58,7 @@ void manual_test_CURL_GET() {
   int len = raw_len;
   const char* buf = r->raw;
 
-  /* Method = "GET" */ 
+  /* Method = "GET" */
   hp2_datum d = hp2_parse(&parser, buf, len);
   assert(d.type == HP2_METHOD);
   assert(d.partial == 0);
@@ -155,7 +155,7 @@ int main() {
   printf("sizeof(hp2_parser) = %d\n", (int)sizeof(hp2_parser));
 
   manual_test_CURL_GET();
-  
+
   for (i = 0; requests[i].name; i++) {
     printf("test_req(%s)\n", requests[i].name);
     test_req(&requests[i]);

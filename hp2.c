@@ -182,8 +182,8 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
         if (c == ' ' || c == '\r' || c == '\n') {
           datum.end = head;
-          switch (c) { 
-            case ' ': 
+          switch (c) {
+            case ' ':
               parser->state = S_REQ_H;
               break;
 
@@ -286,7 +286,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         assert(datum.type == HP2_EAGAIN);
         if (c == '\r') {
           parser->state = S_REQ_CRLF;
-        } else if (c == '\n') { 
+        } else if (c == '\n') {
           parser->state = S_FIELD_START;
         } else if (c == ' ') {
           ;
@@ -326,7 +326,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
            * Content-Length, Connection, and Transfer-Encoding.
            */
           c = LOWER(c);
-          switch (c) { 
+          switch (c) {
             case 'c':
               parser->header_state = HS_CO;
               break;
@@ -437,7 +437,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         parser->state = S_VALUE;
 
 
-        switch (parser->header_state) { 
+        switch (parser->header_state) {
           case HS_MATCHING_CONTENT_LENGTH: {
             parser->content_length = 0;
             break;
@@ -458,7 +458,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             }
             break;
           }
-          
+
           case HS_MATCHING_TRANSFER_ENCODING: {
             parser->match = CHUNKED;
             parser->i = 0;
