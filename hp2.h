@@ -76,6 +76,7 @@ typedef struct {
 
 typedef struct {
   /* private */
+  char flags;
   enum hp2_datum_type last_datum;
   unsigned char state;
   unsigned char header_state;

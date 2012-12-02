@@ -4,6 +4,12 @@
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
+enum flag {
+  F_CONNECTION_KEEP_ALIVE   = 0x01,
+  F_CONNECTION_CLOSE        = 0x02,
+  F_TRANSFER_ENCODING_CHUNK = 0x04
+};
+
 enum state {
   S_REQ_START,
   S_MSG_END,
@@ -96,7 +102,6 @@ const char is_url_char[] = {
 #define CLOSE "close"
 
 
-
 static void headers_complete(hp2_parser* parser,
                              const char* head,
                              hp2_datum* datum) {
@@ -134,6 +139,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_REQ_START: {
         if (IS_METHOD_CHAR(c)) {
           /* Reset the parser */
+          parser->flags = 0;
           parser->content_length = 0;
           parser->version_major = 0;
           parser->version_minor = 0;
@@ -343,7 +349,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             case 't':
               parser->header_state = HS_MATCH_TRANSFER_ENCODING;
               parser->match = TRANSFER_ENCODING;
-              parser->i = 0;
+              parser->i = 1;
               break;
 
             default:
@@ -446,8 +452,10 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         datum.start = head;
         parser->state = S_VALUE;
 
-
         switch (parser->header_state) {
+          case HS_ANYTHING:
+            break;
+
           case HS_MATCH_CONTENT_LENGTH: {
             parser->content_length = 0;
             break;
@@ -475,23 +483,48 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             break;
           }
 
-          case HS_ANYTHING:
-            break;
-
           default:
             assert(0 && "should not reach here");
         }
         /* pass-through to S_VALUE */
 
       case S_VALUE: {
+        /* End of header value */
         if (c == '\r' || c == '\n') {
           assert(datum.type == HP2_VALUE);
           datum.end = head;
           parser->state = c == '\r' ? S_VALUE_CR : S_VALUE_CRLF;
+
+          if (parser->header_state != HS_ANYTHING) {
+            switch (parser->header_state) {
+              case HS_MATCH_KEEP_ALIVE: {
+                if (parser->match[parser->i] == '\0') {
+                  parser->flags |= F_CONNECTION_KEEP_ALIVE;
+                }
+                break;
+              }
+
+              case HS_MATCH_CLOSE: {
+                if (parser->match[parser->i] == '\0') {
+                  parser->flags |= F_CONNECTION_CLOSE;
+                }
+                break;
+              }
+
+              case HS_MATCH_TRANSFER_ENCODING: {
+                if (parser->match[parser->i] == '\0') {
+                  parser->flags |= F_TRANSFER_ENCODING_CHUNK;
+                }
+                break;
+              }
+            }
+          }
+
           head--; /* XXX back up head */
           goto datum_complete;
         }
 
+        /* header value */
         if (parser->header_state != HS_ANYTHING) {
           c = LOWER(c);
           switch (parser->header_state) {
@@ -515,6 +548,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
               assert(0 && "should not reach here");
           }
         }
+
         break;
       }
 
