@@ -2,7 +2,12 @@
 #include <assert.h>
 #include "hp2.h"
 
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+
 enum state {
+  S_REQ_START,
+  S_MSG_END,
+
   S_METHOD_START,
   S_METHOD,
   S_URL_START,
@@ -25,7 +30,7 @@ enum state {
   S_VALUE,
   S_VALUE_CR,
   S_VALUE_CRLF,
-  S_BODY_START,
+  S_IDENTITY_CONTENT,
 
   HS_ANYTHING,
   HS_C,
@@ -40,13 +45,7 @@ enum state {
 
 void hp2_req_init(hp2_parser* parser) {
   parser->last_datum = HP2_EAGAIN;
-  parser->state = S_METHOD_START;
-  parser->version_major = 0;
-  parser->version_minor = 0;
-  parser->upgrade = 0;
-  parser->content_length = 0;
-  parser->body_read = 0;
-  parser->code = 0;
+  parser->state = S_REQ_START;
 }
 
 
@@ -103,45 +102,70 @@ static void headers_complete(hp2_parser* parser,
                              hp2_datum* datum) {
   assert(datum->start == NULL);
 
-  /* If the message has zero length, don't emit the HP2_HEADERS_COMPLETE datum,
-   * just do HP2_MSG_COMPLETE.
-   */
   if (parser->content_length == 0) {
-    datum->type = HP2_MSG_COMPLETE;
+    /* XXX should check connection header to see if we're accepting more */
+    parser->state = S_MSG_END;
   } else {
-    assert(0 && "implement me");
-    datum->type = HP2_HEADERS_COMPLETE;
+    parser->state = S_IDENTITY_CONTENT;
   }
-  datum->last = datum->partial = 0;
-  datum->end = head + 1;
-  parser->state = S_BODY_START;
 
-  parser->body_read = 0;
+  datum->type = HP2_HEADER_END;
+  datum->partial = 0;
+  datum->start = datum->end = head + 1;
+
+  parser->content_read = 0;
 }
 
 
 hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
   hp2_datum datum; /* returned datum */
-  const char* head; /* parser head */
+  const char* head = data; /* parser head */
   const char* end = data + len;
+  int to_read;
 
   datum.type = parser->last_datum;
   datum.start = parser->last_datum == HP2_EAGAIN ? NULL : data;
   datum.end = NULL;
-  datum.last = 0;
   datum.partial = 0;
 
-  for (head = data; head < end; head++) {
+  for (; head < end || parser->state == S_MSG_END; head++) {
     char c = *head;
     switch (parser->state) {
-      case S_METHOD_START: {
+      case S_REQ_START: {
         if (IS_METHOD_CHAR(c)) {
-          datum.start = head;
-          datum.type = HP2_METHOD;
-          parser->state = S_METHOD;
+          /* Reset the parser */
+          parser->content_length = 0;
+          parser->version_major = 0;
+          parser->version_minor = 0;
+          parser->upgrade = 0;
+          parser->content_read = 0;
+
+          datum.start = datum.end = head;
+          datum.type = HP2_MSG_START;
+          parser->state = S_METHOD_START;
+          goto datum_complete;
         } else if (!IS_WHITESPACE(c)) {
           goto error;
         }
+        break;
+      }
+
+      case S_MSG_END: {
+        datum.type = HP2_MSG_END;
+        datum.start = datum.end = head;
+        /* TODO check to see if we have persistant connection */
+        parser->state = S_REQ_START;
+        goto datum_complete;
+        break;
+      }
+
+      case S_METHOD_START: {
+        /* We already checked this in S_REQ_START */
+        assert(IS_METHOD_CHAR(c));
+
+        datum.start = head;
+        datum.type = HP2_METHOD;
+        parser->state = S_METHOD;
         break;
       }
 
@@ -313,7 +337,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
           c = LOWER(c);
           switch (c) {
             case 'c':
-              parser->header_state = HS_CO;
+              parser->header_state = HS_C;
               break;
 
             case 't':
@@ -345,48 +369,6 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_FIELD: {
         assert(datum.type == HP2_FIELD);
 
-        if (parser->header_state != HS_ANYTHING) {
-          c = LOWER(c);
-          switch (parser->header_state) {
-            case HS_C: {
-              parser->header_state = c == 'o'? HS_CO : HS_ANYTHING;
-              break;
-            }
-
-            case HS_CO: {
-              parser->header_state = c == 'n'? HS_CON : HS_ANYTHING;
-              break;
-            }
-
-            case HS_CON: {
-              if (c == 't') {
-                parser->header_state = HS_MATCH_CONTENT_LENGTH;
-                parser->match = CONTENT_LENGTH;
-                parser->i = 4;
-              } else if (c == 'n') {
-                parser->header_state = HS_MATCH_CONNECTION;
-                parser->match = CONNECTION;
-                parser->i = 4;
-              } else {
-                parser->header_state = HS_ANYTHING;
-              }
-              break;
-            }
-
-            case HS_MATCH_CONTENT_LENGTH:
-            case HS_MATCH_CONNECTION:
-            case HS_MATCH_TRANSFER_ENCODING:
-              if (parser->match[parser->i++] != c) {
-                parser->header_state = HS_ANYTHING;
-              }
-              break;
-
-            default:
-              assert(0);
-              goto error;
-          }
-        }
-
         if (c == ':') {
           if (parser->header_state != HS_ANYTHING &&
               parser->match[parser->i] != '\0') {
@@ -398,6 +380,49 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
           parser->state = S_FIELD_COLON;
           head--; /* XXX back up head... */
           goto datum_complete;
+        }
+
+        if (parser->header_state != HS_ANYTHING) {
+          c = LOWER(c);
+          switch (parser->header_state) {
+            case HS_C: {
+              parser->header_state = c == 'o' ? HS_CO : HS_ANYTHING;
+              break;
+            }
+
+            case HS_CO: {
+              parser->header_state = c == 'n' ? HS_CON : HS_ANYTHING;
+              break;
+            }
+
+            case HS_CON: {
+              if (c == 't') {
+                parser->header_state = HS_MATCH_CONTENT_LENGTH;
+                parser->match = CONTENT_LENGTH;
+                parser->i = 4;
+                break;
+              } else if (c == 'n') {
+                parser->header_state = HS_MATCH_CONNECTION;
+                parser->match = CONNECTION;
+                parser->i = 4;
+                break;
+              } else {
+                parser->header_state = HS_ANYTHING;
+              }
+              break;
+            }
+
+            case HS_MATCH_CONTENT_LENGTH:
+            case HS_MATCH_CONNECTION:
+            case HS_MATCH_TRANSFER_ENCODING:
+              if (parser->match[parser->i++] == c) break;
+              parser->header_state = HS_ANYTHING;
+              break;
+
+            default:
+              assert(0);
+              goto error;
+          }
         }
 
         if (!IS_FIELD_CHAR(c)) {
@@ -507,14 +532,20 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         break;
       }
 
-      case S_BODY_START: {
-        if (parser->content_length == 0) {
-          datum.type = HP2_MSG_COMPLETE;
+      case S_IDENTITY_CONTENT: {
+        datum.type = HP2_BODY;
+        datum.start = head;
+        to_read = MIN(end - head,
+                      parser->content_length - parser->content_read);
+        parser->content_read += to_read;
+        head += to_read;
+
+        if (parser->content_length == parser->content_read) {
+          assert(datum.type == HP2_BODY);
           datum.end = head;
-          parser->state = S_METHOD_START;
+          parser->state = S_MSG_END;
           goto datum_complete;
         }
-        assert(0 && "implement me");
         break;
       }
     }
@@ -533,7 +564,6 @@ datum_complete:
 
 error:
   datum.type = HP2_ERROR;
-  datum.last = 1;
   datum.start = NULL;
   datum.end = head;
   return datum;

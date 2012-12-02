@@ -10,7 +10,7 @@
  * - Keep-Alive. AKA pipelined messages.
  * - Transfer-Encoding: chunked
  * - Custom request method (http-parser had a fixed list of methods).
- * - Trailing headers.
+ * - Trailing header.
  * - Streaming bodies.
  *
  * Not supported:
@@ -24,36 +24,48 @@
 
 #include <sys/types.h>
 
+/* Every HTTP stream will contain one or more requests which are broken up
+   into datums.
+
+     (HP2_MSG_START
+      HP2_METHOD HP2_URL
+      (HP2_FIELD HP2_VALUE)*
+      HP2_HEADER_END
+      HP2_BODY*
+      (HP2_FIELD HP2_VALUE)*
+      HP2_MSG_END)+
+
+   Note that a trailing header may be present. Check parser->trailing_header to
+   know if this will be expected.
+ */
+
 enum hp2_datum_type {
-  HP2_EAGAIN, /* Needs more input; the next packet. */
+  HP2_EAGAIN, /* Needs more input; read the next packet. */
+  HP2_EOF, /* Designates end of HTTP data. Do not call hp2_parse() again. */
+  HP2_ERROR, /* Bad HTTP. Close the connection. */
+
   HP2_MSG_START,
   HP2_METHOD, /* Request only. Method, E.G. "GET" */
   HP2_REASON, /* Response only. Reason, E.G. "Not Found" */
-  HP2_URL, /* Request URL, E.G. "/favicon.ico" */
-  HP2_FIELD,
-  HP2_VALUE,
-  HP2_HEADERS_COMPLETE, /* Only returned if body is non-zero */
-  HP2_BODY, /* Many HP2_BODY chunks may appear in a row */
-  HP2_MSG_COMPLETE,
-  HP2_ERROR /* Bad HTTP. Close the connection. */
+  HP2_URL, /* Request only. The requested URL, E.G. "/favicon.ico" */
+  HP2_FIELD, /* E.G. "Content-Type" */
+  HP2_VALUE, /* E.G. "text/plain" */
+  HP2_HEADER_END,
+  HP2_BODY, /* Many HP2_BODY chunks may appear in a row. */
+  HP2_MSG_END
 };
 
 typedef struct {
   enum hp2_datum_type type;
 
   /* start, end delimit the data - like a string. But not all datums are
-   * strings; some are just points, like HP2_MSG_START, HP2_HEADERS_COMPLETE,
-   * HP2_MSG_COMPLETE, and HP2_ERROR. They will have both a start and an end.
-   * string datums: HP2_METHOD, HP2_REASON, HP2_URL, HP2_FIELD, HP2_VALUE,
-   * HP2_BODY.
+   * strings; some are just points, like HP2_MSG_START, HP2_HEADER_END,
+   * HP2_MSG_END, and HP2_ERROR. They will have start and end pointing to
+   * the same location. The other datums delimit strings:
+   * HP2_METHOD, HP2_REASON, HP2_URL, HP2_FIELD, HP2_VALUE, HP2_BODY.
    */
   const char* start;
   const char* end;
-
-  /* If datum.last is non-zero, close the connection and do not call hp2_parse()
-   * again.
-   */
-  char last;
 
   /* If partial is non-zero, the next datum will be of the same type. This can
    * happen in the case that a string is split over multiple packets. Used for
@@ -71,10 +83,11 @@ typedef struct {
   const char* match;
 
   /* read-only */
-  /* These values should be copied out the struct on HP2_HEADERS_COMPLETE. */
+  /* These values should be copied out the struct on HP2_HEADER_END. */
   unsigned char version_major;
   unsigned char version_minor;
-  size_t body_read;
+  unsigned char trailing_header; /* 1 means trailing header may follow body */
+  size_t content_read;
   char upgrade; /* 1 means that HTTP ends. Do not call hp2_parse() again. */
   ssize_t content_length; /* -1 means unknown body length */
   unsigned int code; /* responses only. E.G. 200, 404. */
@@ -87,11 +100,10 @@ void hp2_req_init(hp2_parser* parser);
  * buffer.
  *
  * The hp2_parse() will parse until it has one datum and then return it.
- *
- * The parser must be restarted with buf = datum.end.
- *
- * If datum.last is 1, then you shouldn't continue to call hp2_parse(). You
- * should also stop reading from the TCP socket.last is 1.
+ * The parser must be restarted repeatedly with buf = datum.end. Even if
+ * datum.end == buf + buflen, that is, zero length in the buffer remaining,
+ * continue to call hp2_parse() until HP2_EAGAIN, HP2_ERROR, or EP2_EOF is
+ * returned.
  *
  * If datum.type == HP2_EAGAIN, the parser has completed parsing buf and needs
  * new input. (Supplied by your next call to recv(2).)
