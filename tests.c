@@ -96,9 +96,49 @@ void test_req(const struct message* req) {
     body_read += chunk_len;
   }
 
-  /* TODO match trailing headers */
+  /* match trailing headers */
+  if (num_headers < req->num_headers) {
+    /* the last datum read should have been a HP2_FIELD */
+    assert(d.type == HP2_FIELD);
+    assert(d.partial == 0);
+    expect_eq(req->headers[num_headers][0], d);
 
-msg_complete:
+    /* value */
+    len -= d.end - buf;
+    buf = d.end;
+    d = hp2_parse(&parser, buf, len);
+    assert(d.type == HP2_VALUE);
+    assert(d.partial == 0);
+    expect_eq(req->headers[num_headers][1], d);
+
+    num_headers++;
+
+    for (;;) {
+      /* field */
+      len -= d.end - buf;
+      buf = d.end;
+      d = hp2_parse(&parser, buf, len);
+
+      if (d.type != HP2_FIELD) break;
+
+      assert(d.type == HP2_FIELD);
+      assert(d.partial == 0);
+      expect_eq(req->headers[num_headers][0], d);
+
+      /* value */
+      len -= d.end - buf;
+      buf = d.end;
+      d = hp2_parse(&parser, buf, len);
+      assert(d.type == HP2_VALUE);
+      assert(d.partial == 0);
+      expect_eq(req->headers[num_headers][1], d);
+
+      num_headers++;
+    }
+  }
+
+  assert(num_headers == req->num_headers);
+
   assert(body_len == body_read);
   assert(strcmp(body, req->body) == 0);
   printf("bodys match. body_len = %d\n", body_len);
@@ -117,7 +157,7 @@ void manual_test_CURL_GET() {
 
   hp2_req_init(&parser);
 
-  /* TODO HP2_MSG_START */
+  /* HP2_MSG_START */
   d = hp2_parse(&parser, buf, len);
   assert(d.type == HP2_MSG_START);
   assert(d.partial == 0);
@@ -224,13 +264,9 @@ int main() {
   printf("sizeof(hp2_datum) = %d\n", (int)sizeof(hp2_datum));
   printf("sizeof(hp2_parser) = %d\n", (int)sizeof(hp2_parser));
 
-  //test_req(&requests[POST_CHUNKED_ALL_YOUR_BASE]);
-  //test_req(&requests[GET_FUNKY_CONTENT_LENGTH]);
-
   manual_test_CURL_GET();
 
   for (i = 0; requests[i].name; i++) {
-    if (i == CHUNKED_W_TRAILING_HEADERS) continue; 
     printf("test_req(%d, %s)\n", i, requests[i].name);
     test_req(&requests[i]);
   }

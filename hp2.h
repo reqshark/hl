@@ -27,16 +27,16 @@
 /* Every HTTP stream will contain one or more requests which are broken up
    into datums.
 
-     (HP2_MSG_START
-      HP2_METHOD HP2_URL
-      (HP2_FIELD HP2_VALUE)*
-      HP2_HEADER_END
-      HP2_BODY*
-      (HP2_FIELD HP2_VALUE)*
-      HP2_MSG_END)+
+   (HP2_MSG_START
+    HP2_METHOD HP2_URL
+    (HP2_FIELD HP2_VALUE)*
+    HP2_HEADER_END
+    HP2_BODY*
+    (HP2_FIELD HP2_VALUE)*
+    HP2_MSG_END)+
 
-   Note that a trailing header may be present. Check parser->trailing_header to
-   know if this will be expected.
+   Note that a trailing header may be present after the body. However, this is
+   very uncommon. See RFC 2616 14.40.
  */
 
 enum hp2_datum_type {
@@ -89,7 +89,6 @@ typedef struct {
   /* These values should be copied out the struct on HP2_HEADER_END. */
   unsigned char version_major;
   unsigned char version_minor;
-  unsigned char trailing_header; /* 1 means trailing header may follow body */
   size_t content_read;
   char upgrade; /* 1 means that HTTP ends. Do not call hp2_parse() again. */
   ssize_t content_length; /* -1 means unknown body length */

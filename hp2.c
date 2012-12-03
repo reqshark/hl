@@ -7,7 +7,8 @@
 enum flag {
   F_CONNECTION_KEEP_ALIVE     = 0x01,
   F_CONNECTION_CLOSE          = 0x02,
-  F_TRANSFER_ENCODING_CHUNKED = 0x04
+  F_TRANSFER_ENCODING_CHUNKED = 0x04,
+  F_TRAILER                   = 0x08
 };
 
 enum state {
@@ -141,10 +142,15 @@ const char unhex[] = {
 #define CLOSE "close"
 
 
-static void headers_complete(hp2_parser* parser,
-                             const char* head,
-                             hp2_datum* datum) {
+/* Don't call this directly, Use HEADER_COMPLETE macro.  This is code to be run
+ * when the normal header is complete. The HEADER_COMPLETE macro handles both
+ * normal and trialing header.
+ */
+static void basic_header_complete(hp2_parser* parser,
+                                  const char* head,
+                                  hp2_datum* datum) {
   assert(datum->start == NULL);
+  assert(!(parser->flags & F_TRAILER));
 
   if (parser->flags & F_TRANSFER_ENCODING_CHUNKED) {
     parser->state = S_CHUNK_START;
@@ -163,6 +169,16 @@ static void headers_complete(hp2_parser* parser,
 
   parser->content_read = 0;
 }
+
+#define HEADER_COMPLETE()                           \
+  do {                                              \
+    if (parser->flags & F_TRAILER) {                \
+      parser->state = S_MSG_END;                    \
+    } else {                                        \
+      basic_header_complete(parser, head, &datum);  \
+      goto datum_complete;                          \
+    }                                               \
+  } while(0)
 
 
 hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
@@ -369,11 +385,11 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
       case S_FIELD_START: {
         assert(datum.type == HP2_EAGAIN);
+
         if (c == '\r') {
           parser->state = S_FIELD_START_CR;
         } else if (c == '\n') {
-          headers_complete(parser, head, &datum);
-          goto datum_complete;
+          HEADER_COMPLETE();
         } else if (c == '\t') {
           /* Tabs indicate continued header value */
           assert(0 && "Implement me");
@@ -383,24 +399,29 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         } else if (IS_FIELD_CHAR(c)) {
           datum.type = HP2_FIELD;
           datum.start = head;
-          /* We need to read a couple of the headers. In particular
-           * Content-Length, Connection, and Transfer-Encoding.
-           */
-          c = LOWER(c);
-          switch (c) {
-            case 'c':
-              parser->header_state = HS_C;
-              break;
+          if (parser->flags & F_TRAILER) {
+            /* Trailing field/values don't need to be parsed. */
+            parser->header_state = HS_ANYTHING;
+          } else {
+            /* We need to read a couple of the headers. In particular
+             * Content-Length, Connection, and Transfer-Encoding.
+             */
+            c = LOWER(c);
+            switch (c) {
+              case 'c':
+                parser->header_state = HS_C;
+                break;
 
-            case 't':
-              parser->header_state = HS_MATCH_TRANSFER_ENCODING;
-              parser->match = TRANSFER_ENCODING;
-              parser->i = 1;
-              break;
+              case 't':
+                parser->header_state = HS_MATCH_TRANSFER_ENCODING;
+                parser->match = TRANSFER_ENCODING;
+                parser->i = 1;
+                break;
 
-            default:
-              parser->header_state = HS_ANYTHING;
-              break;
+              default:
+                parser->header_state = HS_ANYTHING;
+                break;
+            }
           }
           parser->state = S_FIELD;
         }
@@ -410,8 +431,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_FIELD_START_CR: {
         assert(datum.type == HP2_EAGAIN);
         if (c == '\n') {
-          headers_complete(parser, head, &datum);
-          goto datum_complete;
+          HEADER_COMPLETE();
         } else {
           goto error;
         }
@@ -669,12 +689,20 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
       case S_CHUNK_LEN_CRLF: {
         if (c != '\n') goto error;
-        parser->state = S_CHUNK_CONTENT;
         assert(parser->chunk_read == 0);
+
+        if (parser->chunk_len == 0) {
+          /* Last chunk. There may be trailing headers. RFC 2616 14.40. */
+          parser->state = S_FIELD_START;
+          parser->flags |= F_TRAILER;
+        } else {
+          parser->state = S_CHUNK_CONTENT;
+        }
         break;
       }
 
       case S_CHUNK_CONTENT: {
+        assert(parser->chunk_len > 0);
         datum.type = HP2_BODY;
         datum.start = head;
         to_read = MIN(end - head,
@@ -694,18 +722,18 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_CHUNK_CONTENT_CR: {
         if (c != '\r') goto error;
         parser->state = S_CHUNK_CONTENT_CRLF;
+        /* We shouldn't get here in the case that we're on the last chunk. */
+        assert(parser->chunk_len > 0);
         break;
       }
 
       case S_CHUNK_CONTENT_CRLF: {
         if (c != '\n') goto error;
 
-        if (parser->chunk_len == 0) {
-          /* last chunk */
-          parser->state = S_MSG_END;
-        } else {
-          parser->state = S_CHUNK_START;
-        }
+        /* We shouldn't get here in the case that we're on the last chunk. */
+        assert(parser->chunk_len > 0);
+
+        parser->state = S_CHUNK_START;
         break;
       }
     }
