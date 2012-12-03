@@ -5,9 +5,9 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 enum flag {
-  F_CONNECTION_KEEP_ALIVE   = 0x01,
-  F_CONNECTION_CLOSE        = 0x02,
-  F_TRANSFER_ENCODING_CHUNK = 0x04
+  F_CONNECTION_KEEP_ALIVE     = 0x01,
+  F_CONNECTION_CLOSE          = 0x02,
+  F_TRANSFER_ENCODING_CHUNKED = 0x04
 };
 
 enum state {
@@ -38,6 +38,14 @@ enum state {
   S_VALUE_CRLF,
   S_IDENTITY_CONTENT,
 
+  S_CHUNK_START,
+  S_CHUNK_LEN,
+  S_CHUNK_LEN_CRLF,
+  S_CHUNK_KV,
+  S_CHUNK_CONTENT,
+  S_CHUNK_CONTENT_CR,
+  S_CHUNK_CONTENT_CRLF,
+
   HS_ANYTHING,
   HS_C,
   HS_CO,
@@ -63,6 +71,9 @@ void hp2_req_init(hp2_parser* parser) {
 #define IS_URL_CHAR(c) is_url_char[(unsigned char)c]
 #define IS_METHOD_CHAR(c) (IS_LETTER(c) || c == '-')
 #define IS_FIELD_CHAR(c) (IS_LETTER(c) || IS_NUMBER(c) || (c) == '-')
+#define IS_CHUNK_KV_CHAR(c) (IS_LETTER(c) || IS_NUMBER(c) || (c) == '=' || \
+                             (c) == ' ' || (c) == ';')
+#define UNHEX(c) ((int)unhex[(unsigned char)c])
 
 
 const char is_url_char[] = {
@@ -93,6 +104,34 @@ const char is_url_char[] = {
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
 };
 
+const char unhex[] = {
+  /*  NUL SOH STX ETX EOT ENQ ACK \a \b \t \n \v \f \r SO SI  */
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /*  DLE DC1 DC2 DC3 DC4 NAK SYN ETB CAN EM SUB ESC FS GS RS US  */
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /*  SPACE ! " # $ % & ´ ( ) * + , - . /  */
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /*  0 1 2 3 4 5 6 7 8 9 : ; < = > ?  */
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, -1, -1, -1, -1, -1, -1,
+  /*  @ A B C D E F G H I J K L M N O  */
+  -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /*  P Q R S T U V W X Y Z [ \ ] ^ _  */
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /*  ` a b c d e f g h i j k l m n o  */
+  -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /*  p q r s t u v w x y z { | } ~ DEL */
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /* 7bit set */
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+};
+
 #define CONNECTION "connection"
 #define CONTENT_LENGTH "content-length"
 #define TRANSFER_ENCODING "transfer-encoding"
@@ -107,11 +146,15 @@ static void headers_complete(hp2_parser* parser,
                              hp2_datum* datum) {
   assert(datum->start == NULL);
 
-  if (parser->content_length == 0) {
-    /* XXX should check connection header to see if we're accepting more */
-    parser->state = S_MSG_END;
+  if (parser->flags & F_TRANSFER_ENCODING_CHUNKED) {
+    parser->state = S_CHUNK_START;
   } else {
-    parser->state = S_IDENTITY_CONTENT;
+    if (parser->content_length <= 0) {
+      /* XXX should check connection header to see if we're accepting more */
+      parser->state = S_MSG_END;
+    } else {
+      parser->state = S_IDENTITY_CONTENT;
+    }
   }
 
   datum->type = HP2_HEADER_END;
@@ -127,6 +170,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
   const char* head = data; /* parser head */
   const char* end = data + len;
   int to_read;
+  int value;
 
   datum.type = parser->last_datum;
   datum.start = parser->last_datum == HP2_EAGAIN ? NULL : data;
@@ -136,11 +180,13 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
   for (; head < end || parser->state == S_MSG_END; head++) {
     char c = *head;
     switch (parser->state) {
+      default: assert(0);
+
       case S_REQ_START: {
         if (IS_METHOD_CHAR(c)) {
           /* Reset the parser */
           parser->flags = 0;
-          parser->content_length = 0;
+          parser->content_length = -1; /* Indicates no content-length header. */
           parser->version_major = 0;
           parser->version_minor = 0;
           parser->upgrade = 0;
@@ -513,7 +559,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
               case HS_MATCH_TRANSFER_ENCODING: {
                 if (parser->match[parser->i] == '\0') {
-                  parser->flags |= F_TRANSFER_ENCODING_CHUNK;
+                  parser->flags |= F_TRANSFER_ENCODING_CHUNKED;
                 }
                 break;
               }
@@ -579,6 +625,86 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
           datum.end = head;
           parser->state = S_MSG_END;
           goto datum_complete;
+        }
+        break;
+      }
+
+      case S_CHUNK_START: {
+        value = UNHEX(c);
+        if (value < 0) goto error;
+        parser->chunk_read = 0;
+        parser->chunk_len = value;
+        parser->state = S_CHUNK_LEN;
+        break;
+      }
+
+      case S_CHUNK_LEN: {
+        value = UNHEX(c);
+        if (value < 0) {
+          if (c == '\r') {
+            parser->state = S_CHUNK_LEN_CRLF;
+          } else if (IS_CHUNK_KV_CHAR(c)) {
+            parser->state = S_CHUNK_KV;
+          } else {
+            goto error;
+          }
+        } else {
+          parser->chunk_len *= 16;
+          parser->chunk_len += value;
+        }
+        break;
+      }
+
+      case S_CHUNK_KV: {
+        /* We completely ignore chunked key-value pairs */
+        if (IS_CHUNK_KV_CHAR(c)) {
+          ;
+        } else if (c == '\r') {
+          parser->state = S_CHUNK_LEN_CRLF;
+        } else {
+          goto error;
+        }
+        break;
+      }
+
+      case S_CHUNK_LEN_CRLF: {
+        if (c != '\n') goto error;
+        parser->state = S_CHUNK_CONTENT;
+        assert(parser->chunk_read == 0);
+        break;
+      }
+
+      case S_CHUNK_CONTENT: {
+        datum.type = HP2_BODY;
+        datum.start = head;
+        to_read = MIN(end - head,
+                      parser->chunk_len - parser->chunk_read);
+        parser->chunk_read += to_read;
+        head += to_read;
+
+        if (parser->chunk_len == parser->chunk_read) {
+          assert(datum.type == HP2_BODY);
+          datum.end = head;
+          parser->state = S_CHUNK_CONTENT_CR;
+          goto datum_complete;
+        }
+        break;
+      }
+
+      case S_CHUNK_CONTENT_CR: {
+        if (c != '\r') goto error;
+        parser->state = S_CHUNK_CONTENT_CRLF;
+        break;
+      }
+
+      case S_CHUNK_CONTENT_CRLF: {
+        if (c != '\n') goto error;
+
+        if (parser->chunk_len == 0) {
+          /* last chunk */
+          parser->state = S_MSG_END;
+        } else {
+          parser->state = S_CHUNK_START;
         }
         break;
       }

@@ -82,6 +82,8 @@ typedef struct {
   unsigned char header_state;
   unsigned char i;
   const char* match;
+  size_t chunk_read;
+  size_t chunk_len;
 
   /* read-only */
   /* These values should be copied out the struct on HP2_HEADER_END. */

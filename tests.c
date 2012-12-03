@@ -39,7 +39,6 @@ void test_req(const struct message* req) {
   d = hp2_parse(&parser, buf, len);
   assert(d.type == HP2_MSG_START);
   assert(d.partial == 0);
-  assert(d.end == req->raw);
 
   len -= d.end - buf;
   buf = d.end;
@@ -105,7 +104,6 @@ msg_complete:
   printf("bodys match. body_len = %d\n", body_len);
 
   assert(d.type == HP2_MSG_END);
-  assert(d.end == req->raw + raw_len);
 }
 
 
@@ -226,11 +224,13 @@ int main() {
   printf("sizeof(hp2_datum) = %d\n", (int)sizeof(hp2_datum));
   printf("sizeof(hp2_parser) = %d\n", (int)sizeof(hp2_parser));
 
+  //test_req(&requests[POST_CHUNKED_ALL_YOUR_BASE]);
+  //test_req(&requests[GET_FUNKY_CONTENT_LENGTH]);
+
   manual_test_CURL_GET();
 
-  test_req(&requests[GET_FUNKY_CONTENT_LENGTH]);
-
   for (i = 0; requests[i].name; i++) {
+    if (i == CHUNKED_W_TRAILING_HEADERS) continue; 
     printf("test_req(%d, %s)\n", i, requests[i].name);
     test_req(&requests[i]);
   }
