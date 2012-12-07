@@ -14,6 +14,7 @@ enum flag {
 enum state {
   S_REQ_START,
   S_MSG_END,
+  S_EOF,
 
   S_METHOD_START,
   S_METHOD,
@@ -180,6 +181,22 @@ static void basic_header_complete(hp2_parser* parser,
     }                                               \
   } while(0)
 
+int should_keep_alive(hp2_parser* parser) {
+  if (parser->version_major == 1 && parser->version_minor == 1) {
+    if (parser->flags & F_CONNECTION_CLOSE) {
+      return 0;
+    } else {
+      return 1;
+    }
+  } else {
+    if (parser->flags & F_CONNECTION_KEEP_ALIVE) {
+      return 1;
+    } else {
+      return 0;
+    }
+  }
+}
+
 
 hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
   hp2_token token; /* returned token */
@@ -193,7 +210,10 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
   token.end = NULL;
   token.partial = 0;
 
-  for (; head < end || parser->state == S_MSG_END; head++) {
+  for (; head < end ||
+       parser->state == S_MSG_END ||
+       parser->state == S_EOF;
+       head++) {
     char c = *head;
     switch (parser->state) {
       default: assert(0);
@@ -221,10 +241,18 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_MSG_END: {
         token.kind = HP2_MSG_END;
         token.start = token.end = head;
-        /* TODO check to see if we have persistant connection */
-        parser->state = S_REQ_START;
+
+        /* Check to see if we have persistant connection. */
+        parser->state = should_keep_alive(parser) ? S_REQ_START : S_EOF;
+
         goto token_complete;
         break;
+      }
+
+      case S_EOF: {
+        token.kind = HP2_EOF;
+        token.start = token.end = head;
+        goto token_complete;
       }
 
       case S_METHOD_START: {

@@ -161,8 +161,7 @@ void test_req(const struct message* req) {
 
   /* After the message should either get HP2_EOF or HP2_EAGAIN depending on
    * req->should_keep_alive. This corresponds roughly to the setting of the
-   * Connection header. (HTTP pipelining involves the protocol version and 
-   * transfer encoding as well.)
+   * Connection header. (HTTP pipelining involves the protocol version too.)
    */
 
   len -= d.end - buf;
