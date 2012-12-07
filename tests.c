@@ -26,7 +26,7 @@ void test_pipeline(const struct message* req1,
                    const struct message* req2,
                    const struct message* req3) {
   hp2_parser parser;
-  hp2_token d;
+  hp2_token token;
 
   /* TODO */
 }
@@ -34,7 +34,7 @@ void test_pipeline(const struct message* req1,
 
 void test_req(const struct message* req) {
   hp2_parser parser;
-  hp2_token d;
+  hp2_token token;
   const char* buf = req->raw;
   int raw_len = strlen(req->raw);
   int len = raw_len;
@@ -46,49 +46,49 @@ void test_req(const struct message* req) {
 
   hp2_req_init(&parser);
 
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_MSG_START);
-  assert(d.partial == 0);
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_MSG_START);
+  assert(token.partial == 0);
 
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_METHOD);
-  assert(d.partial == 0);
-  expect_eq(req->method, d);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_METHOD);
+  assert(token.partial == 0);
+  expect_eq(req->method, token);
 
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_URL);
-  assert(d.partial == 0);
-  expect_eq(req->request_url, d);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_URL);
+  assert(token.partial == 0);
+  expect_eq(req->request_url, token);
 
   for (;;) {
     /* field */
-    len -= d.end - buf;
-    buf = d.end;
-    d = hp2_parse(&parser, buf, len);
+    len -= token.end - buf;
+    buf = token.end;
+    token = hp2_parse(&parser, buf, len);
 
-    if (d.kind != HP2_FIELD) break;
+    if (token.kind != HP2_FIELD) break;
 
-    assert(d.kind == HP2_FIELD);
-    assert(d.partial == 0);
-    expect_eq(req->headers[num_headers][0], d);
+    assert(token.kind == HP2_FIELD);
+    assert(token.partial == 0);
+    expect_eq(req->headers[num_headers][0], token);
 
     /* value */
-    len -= d.end - buf;
-    buf = d.end;
-    d = hp2_parse(&parser, buf, len);
-    assert(d.kind == HP2_VALUE);
-    assert(d.partial == 0);
-    expect_eq(req->headers[num_headers][1], d);
+    len -= token.end - buf;
+    buf = token.end;
+    token = hp2_parse(&parser, buf, len);
+    assert(token.kind == HP2_VALUE);
+    assert(token.partial == 0);
+    expect_eq(req->headers[num_headers][1], token);
 
     num_headers++;
   }
 
-  assert(d.kind == HP2_HEADER_END);
-  assert(d.partial == 0);
+  assert(token.kind == HP2_HEADER_END);
+  assert(token.partial == 0);
 
   /* Check HTTP version matches */
   assert(parser.version_major == req->http_major);
@@ -96,56 +96,56 @@ void test_req(const struct message* req) {
 
   /* Now read the body */
   for (;;) {
-    len -= d.end - buf;
-    buf = d.end;
-    d = hp2_parse(&parser, buf, len);
+    len -= token.end - buf;
+    buf = token.end;
+    token = hp2_parse(&parser, buf, len);
 
-    if (d.kind != HP2_BODY) break;
+    if (token.kind != HP2_BODY) break;
 
-    assert(d.kind == HP2_BODY);
-    assert(d.partial == 0);
+    assert(token.kind == HP2_BODY);
+    assert(token.partial == 0);
 
-    chunk_len = d.end - d.start;
-    memcpy(body + body_read, d.start, chunk_len);
+    chunk_len = token.end - token.start;
+    memcpy(body + body_read, token.start, chunk_len);
     body_read += chunk_len;
   }
 
   /* match trailing headers */
   if (num_headers < req->num_headers) {
     /* the last token read should have been a HP2_FIELD */
-    assert(d.kind == HP2_FIELD);
-    assert(d.partial == 0);
-    expect_eq(req->headers[num_headers][0], d);
+    assert(token.kind == HP2_FIELD);
+    assert(token.partial == 0);
+    expect_eq(req->headers[num_headers][0], token);
 
     /* value */
-    len -= d.end - buf;
-    buf = d.end;
-    d = hp2_parse(&parser, buf, len);
-    assert(d.kind == HP2_VALUE);
-    assert(d.partial == 0);
-    expect_eq(req->headers[num_headers][1], d);
+    len -= token.end - buf;
+    buf = token.end;
+    token = hp2_parse(&parser, buf, len);
+    assert(token.kind == HP2_VALUE);
+    assert(token.partial == 0);
+    expect_eq(req->headers[num_headers][1], token);
 
     num_headers++;
 
     for (;;) {
       /* field */
-      len -= d.end - buf;
-      buf = d.end;
-      d = hp2_parse(&parser, buf, len);
+      len -= token.end - buf;
+      buf = token.end;
+      token = hp2_parse(&parser, buf, len);
 
-      if (d.kind != HP2_FIELD) break;
+      if (token.kind != HP2_FIELD) break;
 
-      assert(d.kind == HP2_FIELD);
-      assert(d.partial == 0);
-      expect_eq(req->headers[num_headers][0], d);
+      assert(token.kind == HP2_FIELD);
+      assert(token.partial == 0);
+      expect_eq(req->headers[num_headers][0], token);
 
       /* value */
-      len -= d.end - buf;
-      buf = d.end;
-      d = hp2_parse(&parser, buf, len);
-      assert(d.kind == HP2_VALUE);
-      assert(d.partial == 0);
-      expect_eq(req->headers[num_headers][1], d);
+      len -= token.end - buf;
+      buf = token.end;
+      token = hp2_parse(&parser, buf, len);
+      assert(token.kind == HP2_VALUE);
+      assert(token.partial == 0);
+      expect_eq(req->headers[num_headers][1], token);
 
       num_headers++;
     }
@@ -157,27 +157,29 @@ void test_req(const struct message* req) {
   assert(strcmp(body, req->body) == 0);
   printf("bodys match. body_len = %d\n", body_len);
 
-  assert(d.kind == HP2_MSG_END);
+  assert(token.kind == HP2_MSG_END);
 
   /* After the message should either get HP2_EOF or HP2_EAGAIN depending on
    * req->should_keep_alive. This corresponds roughly to the setting of the
    * Connection header. (HTTP pipelining involves the protocol version too.)
    */
 
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  if (req->should_keep_alive) {
-    assert(d.kind == HP2_EAGAIN);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  if (req->upgrade) {
+    assert(token.kind == HP2_EOF);
+  } else if (req->should_keep_alive) {
+    assert(token.kind == HP2_EAGAIN);
   } else {
-    assert(d.kind == HP2_EOF);
+    assert(token.kind == HP2_EOF);
   }
 }
 
 
 void manual_test_CURL_GET() {
   hp2_parser parser;
-  hp2_token d;
+  hp2_token token;
   const struct message* r = &requests[CURL_GET];
   int raw_len =  strlen(r->raw);
   int len = raw_len;
@@ -186,103 +188,103 @@ void manual_test_CURL_GET() {
   hp2_req_init(&parser);
 
   /* HP2_MSG_START */
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_MSG_START);
-  assert(d.partial == 0);
-  assert(d.start == d.end);
-  assert(d.end == r->raw);
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_MSG_START);
+  assert(token.partial == 0);
+  assert(token.start == token.end);
+  assert(token.end == r->raw);
 
   /* Method = "GET" */
-  len -= d.end - buf;
-  buf = d.end;
+  len -= token.end - buf;
+  buf = token.end;
   assert(len == raw_len);
   assert(buf == r->raw);
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_METHOD);
-  assert(d.partial == 0);
-  expect_eq(r->method, d);
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_METHOD);
+  assert(token.partial == 0);
+  expect_eq(r->method, token);
 
   /* HP2_URL = "/test" */
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_URL);
-  assert(d.partial == 0);
-  expect_eq(r->request_url, d);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_URL);
+  assert(token.partial == 0);
+  expect_eq(r->request_url, token);
 
   /* HP2_FIELD = "User-Agent" */
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_FIELD);
-  assert(d.partial == 0);
-  expect_eq(r->headers[0][0], d);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_FIELD);
+  assert(token.partial == 0);
+  expect_eq(r->headers[0][0], token);
 
   assert(parser.version_major == r->http_major);
   assert(parser.version_minor == r->http_minor);
 
   /* HP2_VALUE = "curl/7.18.0 (i486-pc-linux-gnu) libcurl/7.18.0 OpenSSL/0.9.8g zlib/1.2.3.3 libidn/1.1" */
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_VALUE);
-  assert(d.partial == 0);
-  expect_eq(r->headers[0][1], d);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_VALUE);
+  assert(token.partial == 0);
+  expect_eq(r->headers[0][1], token);
 
   /* HP2_FIELD = "Host" */
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_FIELD);
-  assert(d.partial == 0);
-  expect_eq(r->headers[1][0], d);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_FIELD);
+  assert(token.partial == 0);
+  expect_eq(r->headers[1][0], token);
 
   /* HP2_VALUE = "0.0.0.0=5000" */
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_VALUE);
-  assert(d.partial == 0);
-  expect_eq(r->headers[1][1], d);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_VALUE);
+  assert(token.partial == 0);
+  expect_eq(r->headers[1][1], token);
 
   /* HP2_FIELD = "Accept" */
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_FIELD);
-  assert(d.partial == 0);
-  expect_eq(r->headers[2][0], d);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_FIELD);
+  assert(token.partial == 0);
+  expect_eq(r->headers[2][0], token);
 
   // HP2_VALUE = "*/*"
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_VALUE);
-  assert(d.partial == 0);
-  expect_eq(r->headers[2][1], d);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_VALUE);
+  assert(token.partial == 0);
+  expect_eq(r->headers[2][1], token);
 
   // HP2_HEADER_END
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_HEADER_END);
-  assert(d.start == d.end);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_HEADER_END);
+  assert(token.start == token.end);
   // CURL_GET has not body, so the headers should be at the end of the buffer.
-  assert(d.end == r->raw + raw_len);
+  assert(token.end == r->raw + raw_len);
 
   // HP2_MSG_END
-  len -= d.end - buf;
-  buf = d.end;
-  d = hp2_parse(&parser, buf, len);
-  assert(d.kind == HP2_MSG_END);
-  assert(d.partial == 0);
-  assert(d.start == d.end);
+  len -= token.end - buf;
+  buf = token.end;
+  token = hp2_parse(&parser, buf, len);
+  assert(token.kind == HP2_MSG_END);
+  assert(token.partial == 0);
+  assert(token.start == token.end);
   // We're at the end of the buffer
-  assert(d.end == r->raw + raw_len);
+  assert(token.end == r->raw + raw_len);
 
   // If we call hp2_parse() again, we get HP2_EAGAIN.
-  d = hp2_parse(&parser, d.end, 0);
-  assert(d.kind == HP2_EAGAIN);
+  token = hp2_parse(&parser, token.end, 0);
+  assert(token.kind == HP2_EAGAIN);
 }
 
 

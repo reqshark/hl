@@ -8,13 +8,15 @@ enum flag {
   F_CONNECTION_KEEP_ALIVE     = 0x01,
   F_CONNECTION_CLOSE          = 0x02,
   F_TRANSFER_ENCODING_CHUNKED = 0x04,
-  F_TRAILER                   = 0x08
+  F_TRAILER                   = 0x08,
+  F_UPGRADE                   = 0x10
 };
 
 enum state {
   S_REQ_START,
   S_MSG_END,
   S_EOF,
+  S_UPGRADE,
 
   S_METHOD_START,
   S_METHOD,
@@ -55,6 +57,7 @@ enum state {
   HS_MATCH_CONNECTION,
   HS_MATCH_CONTENT_LENGTH,
   HS_MATCH_TRANSFER_ENCODING,
+  HS_MATCH_UPGRADE,
   HS_MATCH_KEEP_ALIVE,
   HS_MATCH_CLOSE
 };
@@ -141,6 +144,7 @@ const char unhex[] = {
 #define CHUNKED "chunked"
 #define KEEP_ALIVE "keep-alive"
 #define CLOSE "close"
+#define UPGRADE "upgrade"
 
 
 /* Don't call this directly, Use HEADER_COMPLETE macro.  This is code to be run
@@ -153,7 +157,9 @@ static void basic_header_complete(hp2_parser* parser,
   assert(token->start == NULL);
   assert(!(parser->flags & F_TRAILER));
 
-  if (parser->flags & F_TRANSFER_ENCODING_CHUNKED) {
+  if (parser->flags & F_UPGRADE) {
+    parser->state = S_MSG_END;
+  } else if (parser->flags & F_TRANSFER_ENCODING_CHUNKED) {
     parser->state = S_CHUNK_START;
   } else {
     if (parser->content_length <= 0) {
@@ -212,7 +218,8 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
   for (; head < end ||
        parser->state == S_MSG_END ||
-       parser->state == S_EOF;
+       parser->state == S_EOF ||
+       parser->state == S_UPGRADE;
        head++) {
     char c = *head;
     switch (parser->state) {
@@ -224,7 +231,7 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
           parser->flags = 0;
           parser->content_length = -1; /* Indicates no content-length header. */
           parser->version_major = 0;
-          parser->version_minor = 0;
+          parser->version_minor = 9;
           parser->upgrade = 0;
           parser->content_read = 0;
 
@@ -242,13 +249,18 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         token.kind = HP2_MSG_END;
         token.start = token.end = head;
 
-        /* Check to see if we have persistant connection. */
-        parser->state = should_keep_alive(parser) ? S_REQ_START : S_EOF;
+        if (parser->flags & F_UPGRADE) {
+          parser->state = S_EOF;
+        } else {
+          /* Check to see if we have persistant connection. */
+          parser->state = should_keep_alive(parser) ? S_REQ_START : S_EOF;
+        }
 
         goto token_complete;
         break;
       }
 
+      case S_UPGRADE:
       case S_EOF: {
         token.kind = HP2_EOF;
         token.start = token.end = head;
@@ -440,6 +452,12 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
                 parser->header_state = HS_C;
                 break;
 
+              case 'u':
+                parser->header_state = HS_MATCH_UPGRADE;
+                parser->match = UPGRADE;
+                parser->i = 1;
+                break;
+
               case 't':
                 parser->header_state = HS_MATCH_TRANSFER_ENCODING;
                 parser->match = TRANSFER_ENCODING;
@@ -515,6 +533,7 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             case HS_MATCH_CONTENT_LENGTH:
             case HS_MATCH_CONNECTION:
             case HS_MATCH_TRANSFER_ENCODING:
+            case HS_MATCH_UPGRADE:
               if (parser->match[parser->i++] == c) break;
               parser->header_state = HS_ANYTHING;
               break;
@@ -568,6 +587,12 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             } else {
               parser->header_state = HS_ANYTHING;
             }
+            break;
+          }
+
+          case HS_MATCH_UPGRADE: {
+            parser->header_state = HS_ANYTHING;
+            parser->flags |= F_UPGRADE;
             break;
           }
 
