@@ -4,7 +4,6 @@
  * No callbacks. Simplier interface.
  * Supports both request and response parsing.
  *
- *
  * HTTP Features Supported:
  * - Full HTTP/1.1.
  * - Keep-Alive. AKA pipelined messages.
@@ -25,7 +24,7 @@
 #include <sys/types.h>
 
 /* Every HTTP stream will contain one or more requests which are broken up
-   into datums.
+   into tokens.
 
    (HP2_MSG_START
     HP2_METHOD HP2_URL
@@ -34,12 +33,13 @@
     HP2_BODY*
     (HP2_FIELD HP2_VALUE)*
     HP2_MSG_END)+
+    HP2_EOF
 
    Note that a trailing header may be present after the body. However, this is
    very uncommon. See RFC 2616 14.40.
  */
 
-enum hp2_datum_type {
+enum hp2_token_kind {
   HP2_EAGAIN, /* Needs more input; read the next packet. */
   HP2_EOF, /* Designates end of HTTP data. Do not call hp2_parse() again. */
   HP2_ERROR, /* Bad HTTP. Close the connection. */
@@ -56,28 +56,28 @@ enum hp2_datum_type {
 };
 
 typedef struct {
-  enum hp2_datum_type type;
+  enum hp2_token_kind kind;
 
-  /* start, end delimit the data - like a string. But not all datums are
+  /* start, end delimit the data - like a string. But not all tokens are
    * strings; some are just points, like HP2_MSG_START, HP2_HEADER_END,
    * HP2_MSG_END, and HP2_ERROR. They will have start and end pointing to
-   * the same location. The other datums delimit strings:
+   * the same location. The other tokens delimit strings:
    * HP2_METHOD, HP2_REASON, HP2_URL, HP2_FIELD, HP2_VALUE, HP2_BODY.
    */
   const char* start;
   const char* end;
 
-  /* If partial is non-zero, the next datum will be of the same type. This can
+  /* If partial is non-zero, the next token will be of the same kind. This can
    * happen in the case that a string is split over multiple packets. Used for
    * HP2_METHOD, HP2_REASON, HP2_URL, HP2_FIELD, HP2_VALUE, HP2_BODY.
    */
   char partial;
-} hp2_datum;
+} hp2_token;
 
 typedef struct {
   /* private */
   char flags;
-  enum hp2_datum_type last_datum;
+  enum hp2_token_kind last;
   unsigned char state;
   unsigned char header_state;
   unsigned char i;
@@ -101,16 +101,17 @@ void hp2_req_init(hp2_parser* parser);
 /* buf is a buffer filled with HTTP data. buflen is the length of the
  * buffer.
  *
- * The hp2_parse() will parse until it has one datum and then return it.
- * The parser must be restarted repeatedly with buf = datum.end. Even if
- * datum.end == buf + buflen, that is, zero length in the buffer remaining,
+ * The hp2_parse() will parse until it has one token and then return it.
+ * Yes, it's copy-by-value. sizeof(hp2_token) == 32 - not a big deal.
+ * The parser must be restarted repeatedly with buf = token.end. Even if
+ * token.end == buf + buflen, that is, zero length in the buffer remaining,
  * continue to call hp2_parse() until HP2_EAGAIN, HP2_ERROR, or EP2_EOF is
  * returned.
  *
- * If datum.type == HP2_EAGAIN, the parser has completed parsing buf and needs
+ * If token.kind == HP2_EAGAIN, the parser has completed parsing buf and needs
  * new input. (Supplied by your next call to recv(2).)
  */
-hp2_datum hp2_parse(hp2_parser* parser, const char* buf, size_t buflen);
+hp2_token hp2_parse(hp2_parser* parser, const char* buf, size_t buflen);
 
 
 /* If you are writing a web server, stop here. The rest is for writing http

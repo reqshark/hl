@@ -59,7 +59,7 @@ enum state {
 };
 
 void hp2_req_init(hp2_parser* parser) {
-  parser->last_datum = HP2_EAGAIN;
+  parser->last = HP2_EAGAIN;
   parser->state = S_REQ_START;
 }
 
@@ -148,8 +148,8 @@ const char unhex[] = {
  */
 static void basic_header_complete(hp2_parser* parser,
                                   const char* head,
-                                  hp2_datum* datum) {
-  assert(datum->start == NULL);
+                                  hp2_token* token) {
+  assert(token->start == NULL);
   assert(!(parser->flags & F_TRAILER));
 
   if (parser->flags & F_TRANSFER_ENCODING_CHUNKED) {
@@ -163,9 +163,9 @@ static void basic_header_complete(hp2_parser* parser,
     }
   }
 
-  datum->type = HP2_HEADER_END;
-  datum->partial = 0;
-  datum->start = datum->end = head + 1;
+  token->kind = HP2_HEADER_END;
+  token->partial = 0;
+  token->start = token->end = head + 1;
 
   parser->content_read = 0;
 }
@@ -175,23 +175,23 @@ static void basic_header_complete(hp2_parser* parser,
     if (parser->flags & F_TRAILER) {                \
       parser->state = S_MSG_END;                    \
     } else {                                        \
-      basic_header_complete(parser, head, &datum);  \
-      goto datum_complete;                          \
+      basic_header_complete(parser, head, &token);  \
+      goto token_complete;                          \
     }                                               \
   } while(0)
 
 
-hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
-  hp2_datum datum; /* returned datum */
+hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
+  hp2_token token; /* returned token */
   const char* head = data; /* parser head */
   const char* end = data + len;
   int to_read;
   int value;
 
-  datum.type = parser->last_datum;
-  datum.start = parser->last_datum == HP2_EAGAIN ? NULL : data;
-  datum.end = NULL;
-  datum.partial = 0;
+  token.kind = parser->last;
+  token.start = parser->last == HP2_EAGAIN ? NULL : data;
+  token.end = NULL;
+  token.partial = 0;
 
   for (; head < end || parser->state == S_MSG_END; head++) {
     char c = *head;
@@ -208,10 +208,10 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
           parser->upgrade = 0;
           parser->content_read = 0;
 
-          datum.start = datum.end = head;
-          datum.type = HP2_MSG_START;
+          token.start = token.end = head;
+          token.kind = HP2_MSG_START;
           parser->state = S_METHOD_START;
-          goto datum_complete;
+          goto token_complete;
         } else if (!IS_WHITESPACE(c)) {
           goto error;
         }
@@ -219,11 +219,11 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_MSG_END: {
-        datum.type = HP2_MSG_END;
-        datum.start = datum.end = head;
+        token.kind = HP2_MSG_END;
+        token.start = token.end = head;
         /* TODO check to see if we have persistant connection */
         parser->state = S_REQ_START;
-        goto datum_complete;
+        goto token_complete;
         break;
       }
 
@@ -231,18 +231,18 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         /* We already checked this in S_REQ_START */
         assert(IS_METHOD_CHAR(c));
 
-        datum.start = head;
-        datum.type = HP2_METHOD;
+        token.start = head;
+        token.kind = HP2_METHOD;
         parser->state = S_METHOD;
         break;
       }
 
       case S_METHOD: {
         if (c == ' ') {
-          assert(datum.type == HP2_METHOD);
-          datum.end = head;
+          assert(token.kind == HP2_METHOD);
+          token.end = head;
           parser->state = S_URL_START;
-          goto datum_complete;
+          goto token_complete;
         }
 
         if (!IS_METHOD_CHAR(c)) {
@@ -257,26 +257,26 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             goto error;
           }
 
-          datum.type = HP2_URL;
-          datum.start = head;
+          token.kind = HP2_URL;
+          token.start = head;
           parser->state = S_URL;
         }
         break;
       }
 
       case S_URL: {
-        assert(datum.type == HP2_URL);
+        assert(token.kind == HP2_URL);
 
         if (!IS_URL_CHAR(c)) {
-          datum.end = head;
+          token.end = head;
           parser->state = S_REQ_H;
-          goto datum_complete;
+          goto token_complete;
         }
         break;
       }
 
       case S_REQ_H: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c == ' ') {
           ;
         } else if (c == 'H') {
@@ -292,7 +292,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_HT: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c == 'T') {
           parser->state = S_REQ_HTT;
         } else {
@@ -302,7 +302,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_HTT: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c == 'T') {
           parser->state = S_REQ_HTTP;
         } else {
@@ -312,7 +312,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_HTTP: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c == 'P') {
           parser->state = S_REQ_HTTP_SLASH;
         } else {
@@ -333,7 +333,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_VMAJOR: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (!IS_NUMBER(c)) {
           goto error;
         }
@@ -343,14 +343,14 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_VPERIOD: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c != '.') goto error;
         parser->state = S_REQ_VMINOR;
         break;
       }
 
       case S_REQ_VMINOR: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (!IS_NUMBER(c)) {
           goto error;
         }
@@ -360,7 +360,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_CR: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c == '\r') {
           parser->state = S_REQ_CRLF;
         } else if (c == '\n') {
@@ -374,7 +374,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_CRLF: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c == '\n') {
           parser->state = S_FIELD_START;
         } else {
@@ -384,7 +384,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_FIELD_START: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
 
         if (c == '\r') {
           parser->state = S_FIELD_START_CR;
@@ -397,8 +397,8 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         } else if (c == ' ') {
           ;
         } else if (IS_FIELD_CHAR(c)) {
-          datum.type = HP2_FIELD;
-          datum.start = head;
+          token.kind = HP2_FIELD;
+          token.start = head;
           if (parser->flags & F_TRAILER) {
             /* Trailing field/values don't need to be parsed. */
             parser->header_state = HS_ANYTHING;
@@ -429,7 +429,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_FIELD_START_CR: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c == '\n') {
           HEADER_COMPLETE();
         } else {
@@ -439,7 +439,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_FIELD: {
-        assert(datum.type == HP2_FIELD);
+        assert(token.kind == HP2_FIELD);
 
         if (c == ':') {
           if (parser->header_state != HS_ANYTHING &&
@@ -447,11 +447,11 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             parser->header_state = HS_ANYTHING;
           }
 
-          datum.end = head;
-          assert(datum.partial == 0);
+          token.end = head;
+          assert(token.partial == 0);
           parser->state = S_FIELD_COLON;
           head--; /* XXX back up head... */
-          goto datum_complete;
+          goto token_complete;
         }
 
         if (parser->header_state != HS_ANYTHING) {
@@ -504,7 +504,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_FIELD_COLON: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c != ':') goto error;
         parser->state = S_VALUE_START;
         break;
@@ -513,9 +513,9 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_VALUE_START:
         /* Skip spaces at the beginning of values */
         if (c == ' ') break;
-        assert(datum.type == HP2_EAGAIN);
-        datum.type = HP2_VALUE;
-        datum.start = head;
+        assert(token.kind == HP2_EAGAIN);
+        token.kind = HP2_VALUE;
+        token.start = head;
         parser->state = S_VALUE;
 
         switch (parser->header_state) {
@@ -557,8 +557,8 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_VALUE: {
         /* End of header value */
         if (c == '\r' || c == '\n') {
-          assert(datum.type == HP2_VALUE);
-          datum.end = head;
+          assert(token.kind == HP2_VALUE);
+          token.end = head;
           parser->state = c == '\r' ? S_VALUE_CR : S_VALUE_CRLF;
 
           if (parser->header_state != HS_ANYTHING) {
@@ -587,7 +587,7 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
           }
 
           head--; /* XXX back up head */
-          goto datum_complete;
+          goto token_complete;
         }
 
         /* header value */
@@ -619,32 +619,32 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_VALUE_CR: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c != '\r') goto error;
         parser->state = S_VALUE_CRLF;
         break;
       }
 
       case S_VALUE_CRLF: {
-        assert(datum.type == HP2_EAGAIN);
+        assert(token.kind == HP2_EAGAIN);
         if (c != '\n') goto error;
         parser->state = S_FIELD_START;
         break;
       }
 
       case S_IDENTITY_CONTENT: {
-        datum.type = HP2_BODY;
-        datum.start = head;
+        token.kind = HP2_BODY;
+        token.start = head;
         to_read = MIN(end - head,
                       parser->content_length - parser->content_read);
         parser->content_read += to_read;
         head += to_read;
 
         if (parser->content_length == parser->content_read) {
-          assert(datum.type == HP2_BODY);
-          datum.end = head;
+          assert(token.kind == HP2_BODY);
+          token.end = head;
           parser->state = S_MSG_END;
-          goto datum_complete;
+          goto token_complete;
         }
         break;
       }
@@ -703,18 +703,18 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
       case S_CHUNK_CONTENT: {
         assert(parser->chunk_len > 0);
-        datum.type = HP2_BODY;
-        datum.start = head;
+        token.kind = HP2_BODY;
+        token.start = head;
         to_read = MIN(end - head,
                       parser->chunk_len - parser->chunk_read);
         parser->chunk_read += to_read;
         head += to_read;
 
         if (parser->chunk_len == parser->chunk_read) {
-          assert(datum.type == HP2_BODY);
-          datum.end = head;
+          assert(token.kind == HP2_BODY);
+          token.end = head;
           parser->state = S_CHUNK_CONTENT_CR;
-          goto datum_complete;
+          goto token_complete;
         }
         break;
       }
@@ -739,20 +739,20 @@ hp2_datum hp2_parse(hp2_parser* parser, const char* data, size_t len) {
     }
   }
 
-  datum.end = head;
-  datum.partial = 1;
-  parser->last_datum = datum.type;
-  return datum;
+  token.end = head;
+  token.partial = 1;
+  parser->last = token.kind;
+  return token;
 
-datum_complete:
-  assert(datum.partial == 0);
-  assert(datum.end);
-  parser->last_datum = HP2_EAGAIN;
-  return datum;
+token_complete:
+  assert(token.partial == 0);
+  assert(token.end);
+  parser->last = HP2_EAGAIN;
+  return token;
 
 error:
-  datum.type = HP2_ERROR;
-  datum.start = NULL;
-  datum.end = head;
-  return datum;
+  token.kind = HP2_ERROR;
+  token.start = NULL;
+  token.end = head;
+  return token;
 }
