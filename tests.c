@@ -22,16 +22,6 @@ void expect_eq(const char* expected, hp2_token token) {
 }
 
 
-void test_pipeline(const struct message* req1,
-                   const struct message* req2,
-                   const struct message* req3) {
-  hp2_parser parser;
-  hp2_token token;
-
-  /* TODO */
-}
-
-
 void test_req(const struct message* req) {
   hp2_parser parser;
   hp2_token token;
@@ -179,6 +169,58 @@ void test_req(const struct message* req) {
 }
 
 
+void test_pipeline(const struct message* req1,
+                   const struct message* req2,
+                   const struct message* req3) {
+  hp2_parser parser;
+  hp2_token token;
+  const size_t len1 = strlen(req1->raw);
+  const size_t len2 = strlen(req2->raw);
+  const size_t len3 = strlen(req3->raw);
+  size_t len = len1 + len2 + len3;
+  char raw[len];
+  const char* buf = raw;
+
+  memcpy(raw, req1->raw, len1);
+  memcpy(raw + len1, req2->raw, len2);
+  memcpy(raw + len1 + len2, req3->raw, len3);
+
+  assert(req1->should_keep_alive);
+  assert(req2->should_keep_alive);
+
+  hp2_req_init(&parser);
+
+  enum {
+    START,
+    MSG,
+  } state = START;
+  int msg_num = 1;
+
+  while (msg_num <= 3) {
+    token = hp2_parse(&parser, buf, len);
+
+    switch (state) {
+      case START:
+        assert(token.kind == HP2_MSG_START);
+        state = MSG;
+        break;
+
+      case MSG:
+        if (token.kind == HP2_MSG_END) {
+          state = START;
+          msg_num++;
+        }
+        break;
+    }
+
+    len -= token.end - buf;
+    buf = token.end;
+  }
+
+  assert(msg_num == 4);
+}
+
+
 void manual_test_CURL_GET() {
   hp2_parser parser;
   hp2_token token;
@@ -291,7 +333,7 @@ void manual_test_CURL_GET() {
 
 
 int main() {
-  int i;
+  int i, j, k;
 
   printf("sizeof(hp2_token) = %d\n", (int)sizeof(hp2_token));
   printf("sizeof(hp2_parser) = %d\n", (int)sizeof(hp2_parser));
@@ -301,6 +343,18 @@ int main() {
   for (i = 0; requests[i].name; i++) {
     printf("test_req(%d, %s)\n", i, requests[i].name);
     test_req(&requests[i]);
+  }
+
+  for (i = 0; requests[i].name && requests[i].should_keep_alive; i++) {
+    for (j = 0; requests[j].name && requests[j].should_keep_alive; j++) {
+      for (k = 0; requests[k].name; k++) {
+        printf("test_pipeline(%s, %s, %s)\n",
+               requests[i].name,
+               requests[j].name,
+               requests[k].name);
+        test_pipeline(&requests[i], &requests[j], &requests[k]);
+      }
+    }
   }
 
   return 0;
