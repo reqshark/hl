@@ -169,6 +169,8 @@ void test_req(const struct message* req) {
   token = hp2_parse(&parser, buf, len);
   if (req->upgrade) {
     assert(token.kind == HP2_EOF);
+    token.end = buf + len;
+    expect_eq(req->upgrade, token);
   } else if (req->should_keep_alive) {
     assert(token.kind == HP2_EAGAIN);
   } else {
