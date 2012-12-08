@@ -1,6 +1,6 @@
 #include <stddef.h>
 #include <assert.h>
-#include "hp2.h"
+#include "hl.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -62,9 +62,9 @@ enum state {
   HS_MATCH_CLOSE
 };
 
-void hp2_req_init(hp2_parser* parser) {
-  parser->last = HP2_EAGAIN;
-  parser->state = S_REQ_START;
+void hl_req_init(hl_lexer* lexer) {
+  lexer->last = HL_EAGAIN;
+  lexer->state = S_REQ_START;
 }
 
 
@@ -151,51 +151,51 @@ const char unhex[] = {
  * when the normal header is complete. The HEADER_COMPLETE macro handles both
  * normal and trialing header.
  */
-static void basic_header_complete(hp2_parser* parser,
+static void basic_header_complete(hl_lexer* lexer,
                                   const char* head,
-                                  hp2_token* token) {
+                                  hl_token* token) {
   assert(token->start == NULL);
-  assert(!(parser->flags & F_TRAILER));
+  assert(!(lexer->flags & F_TRAILER));
 
-  if (parser->flags & F_UPGRADE) {
-    parser->state = S_MSG_END;
-  } else if (parser->flags & F_TRANSFER_ENCODING_CHUNKED) {
-    parser->state = S_CHUNK_START;
+  if (lexer->flags & F_UPGRADE) {
+    lexer->state = S_MSG_END;
+  } else if (lexer->flags & F_TRANSFER_ENCODING_CHUNKED) {
+    lexer->state = S_CHUNK_START;
   } else {
-    if (parser->content_length <= 0) {
+    if (lexer->content_length <= 0) {
       /* XXX should check connection header to see if we're accepting more */
-      parser->state = S_MSG_END;
+      lexer->state = S_MSG_END;
     } else {
-      parser->state = S_IDENTITY_CONTENT;
+      lexer->state = S_IDENTITY_CONTENT;
     }
   }
 
-  token->kind = HP2_HEADER_END;
+  token->kind = HL_HEADER_END;
   token->partial = 0;
   token->start = token->end = head + 1;
 
-  parser->content_read = 0;
+  lexer->content_read = 0;
 }
 
 #define HEADER_COMPLETE()                           \
   do {                                              \
-    if (parser->flags & F_TRAILER) {                \
-      parser->state = S_MSG_END;                    \
+    if (lexer->flags & F_TRAILER) {                \
+      lexer->state = S_MSG_END;                    \
     } else {                                        \
-      basic_header_complete(parser, head, &token);  \
+      basic_header_complete(lexer, head, &token);  \
       goto token_complete;                          \
     }                                               \
   } while(0)
 
-int should_keep_alive(hp2_parser* parser) {
-  if (parser->version_major == 1 && parser->version_minor == 1) {
-    if (parser->flags & F_CONNECTION_CLOSE) {
+int should_keep_alive(hl_lexer* lexer) {
+  if (lexer->version_major == 1 && lexer->version_minor == 1) {
+    if (lexer->flags & F_CONNECTION_CLOSE) {
       return 0;
     } else {
       return 1;
     }
   } else {
-    if (parser->flags & F_CONNECTION_KEEP_ALIVE) {
+    if (lexer->flags & F_CONNECTION_KEEP_ALIVE) {
       return 1;
     } else {
       return 0;
@@ -204,40 +204,40 @@ int should_keep_alive(hp2_parser* parser) {
 }
 
 
-hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
-  hp2_token token; /* returned token */
-  const char* head = data; /* parser head */
+hl_token hl_execute(hl_lexer* lexer, const char* data, size_t len) {
+  hl_token token; /* returned token */
+  const char* head = data; /* lexer head */
   const char* end = data + len;
   int to_read;
   int value;
 
-  token.kind = parser->last;
-  token.start = parser->last == HP2_EAGAIN ? NULL : data;
+  token.kind = lexer->last;
+  token.start = lexer->last == HL_EAGAIN ? NULL : data;
   token.end = NULL;
   token.partial = 0;
 
   for (; head < end ||
-       parser->state == S_MSG_END ||
-       parser->state == S_EOF ||
-       parser->state == S_UPGRADE;
+       lexer->state == S_MSG_END ||
+       lexer->state == S_EOF ||
+       lexer->state == S_UPGRADE;
        head++) {
     char c = *head;
-    switch (parser->state) {
+    switch (lexer->state) {
       default: assert(0);
 
       case S_REQ_START: {
         if (IS_METHOD_CHAR(c)) {
-          /* Reset the parser */
-          parser->flags = 0;
-          parser->content_length = -1; /* Indicates no content-length header. */
-          parser->version_major = 0;
-          parser->version_minor = 9;
-          parser->upgrade = 0;
-          parser->content_read = 0;
+          /* Reset the lexer */
+          lexer->flags = 0;
+          lexer->content_length = -1; /* Indicates no content-length header. */
+          lexer->version_major = 0;
+          lexer->version_minor = 9;
+          lexer->upgrade = 0;
+          lexer->content_read = 0;
 
           token.start = token.end = head;
-          token.kind = HP2_MSG_START;
-          parser->state = S_METHOD_START;
+          token.kind = HL_MSG_START;
+          lexer->state = S_METHOD_START;
           goto token_complete;
         } else if (!IS_WHITESPACE(c)) {
           goto error;
@@ -246,14 +246,14 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_MSG_END: {
-        token.kind = HP2_MSG_END;
+        token.kind = HL_MSG_END;
         token.start = token.end = head;
 
-        if (parser->flags & F_UPGRADE) {
-          parser->state = S_EOF;
+        if (lexer->flags & F_UPGRADE) {
+          lexer->state = S_EOF;
         } else {
           /* Check to see if we have persistant connection. */
-          parser->state = should_keep_alive(parser) ? S_REQ_START : S_EOF;
+          lexer->state = should_keep_alive(lexer) ? S_REQ_START : S_EOF;
         }
 
         goto token_complete;
@@ -262,7 +262,7 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
       case S_UPGRADE:
       case S_EOF: {
-        token.kind = HP2_EOF;
+        token.kind = HL_EOF;
         token.start = token.end = head;
         goto token_complete;
       }
@@ -272,16 +272,16 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         assert(IS_METHOD_CHAR(c));
 
         token.start = head;
-        token.kind = HP2_METHOD;
-        parser->state = S_METHOD;
+        token.kind = HL_METHOD;
+        lexer->state = S_METHOD;
         break;
       }
 
       case S_METHOD: {
         if (c == ' ') {
-          assert(token.kind == HP2_METHOD);
+          assert(token.kind == HL_METHOD);
           token.end = head;
-          parser->state = S_URL_START;
+          lexer->state = S_URL_START;
           goto token_complete;
         }
 
@@ -297,34 +297,34 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             goto error;
           }
 
-          token.kind = HP2_URL;
+          token.kind = HL_URL;
           token.start = head;
-          parser->state = S_URL;
+          lexer->state = S_URL;
         }
         break;
       }
 
       case S_URL: {
-        assert(token.kind == HP2_URL);
+        assert(token.kind == HL_URL);
 
         if (!IS_URL_CHAR(c)) {
           token.end = head;
-          parser->state = S_REQ_H;
+          lexer->state = S_REQ_H;
           goto token_complete;
         }
         break;
       }
 
       case S_REQ_H: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c == ' ') {
           ;
         } else if (c == 'H') {
-          parser->state = S_REQ_HT;
+          lexer->state = S_REQ_HT;
         } else if (c == '\r') {
-          parser->state = S_REQ_CRLF;
+          lexer->state = S_REQ_CRLF;
         } else if (c == '\n') {
-          parser->state = S_FIELD_START;
+          lexer->state = S_FIELD_START;
         } else {
           goto error;
         }
@@ -332,9 +332,9 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_HT: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c == 'T') {
-          parser->state = S_REQ_HTT;
+          lexer->state = S_REQ_HTT;
         } else {
           goto error;
         }
@@ -342,9 +342,9 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_HTT: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c == 'T') {
-          parser->state = S_REQ_HTTP;
+          lexer->state = S_REQ_HTTP;
         } else {
           goto error;
         }
@@ -352,9 +352,9 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_HTTP: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c == 'P') {
-          parser->state = S_REQ_HTTP_SLASH;
+          lexer->state = S_REQ_HTTP_SLASH;
         } else {
           goto error;
         }
@@ -363,9 +363,9 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
       case S_REQ_HTTP_SLASH: {
         if (c == '/') {
-          parser->version_major = 0;
-          parser->version_minor = 0;
-          parser->state = S_REQ_VMAJOR;
+          lexer->version_major = 0;
+          lexer->version_minor = 0;
+          lexer->state = S_REQ_VMAJOR;
         } else {
           goto error;
         }
@@ -373,38 +373,38 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_VMAJOR: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (!IS_NUMBER(c)) {
           goto error;
         }
-        parser->version_major += c - '0';
-        parser->state = S_REQ_VPERIOD;
+        lexer->version_major += c - '0';
+        lexer->state = S_REQ_VPERIOD;
         break;
       }
 
       case S_REQ_VPERIOD: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c != '.') goto error;
-        parser->state = S_REQ_VMINOR;
+        lexer->state = S_REQ_VMINOR;
         break;
       }
 
       case S_REQ_VMINOR: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (!IS_NUMBER(c)) {
           goto error;
         }
-        parser->version_minor += c - '0';
-        parser->state = S_REQ_CR;
+        lexer->version_minor += c - '0';
+        lexer->state = S_REQ_CR;
         break;
       }
 
       case S_REQ_CR: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c == '\r') {
-          parser->state = S_REQ_CRLF;
+          lexer->state = S_REQ_CRLF;
         } else if (c == '\n') {
-          parser->state = S_FIELD_START;
+          lexer->state = S_FIELD_START;
         } else if (c == ' ') {
           ;
         } else {
@@ -414,9 +414,9 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_REQ_CRLF: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c == '\n') {
-          parser->state = S_FIELD_START;
+          lexer->state = S_FIELD_START;
         } else {
           goto error;
         }
@@ -424,10 +424,10 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_FIELD_START: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
 
         if (c == '\r') {
-          parser->state = S_FIELD_START_CR;
+          lexer->state = S_FIELD_START_CR;
         } else if (c == '\n') {
           HEADER_COMPLETE();
         } else if (c == '\t') {
@@ -437,11 +437,11 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         } else if (c == ' ') {
           ;
         } else if (IS_FIELD_CHAR(c)) {
-          token.kind = HP2_FIELD;
+          token.kind = HL_FIELD;
           token.start = head;
-          if (parser->flags & F_TRAILER) {
+          if (lexer->flags & F_TRAILER) {
             /* Trailing field/values don't need to be parsed. */
-            parser->header_state = HS_ANYTHING;
+            lexer->header_state = HS_ANYTHING;
           } else {
             /* We need to read a couple of the headers. In particular
              * Content-Length, Connection, and Transfer-Encoding.
@@ -449,33 +449,33 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             c = LOWER(c);
             switch (c) {
               case 'c':
-                parser->header_state = HS_C;
+                lexer->header_state = HS_C;
                 break;
 
               case 'u':
-                parser->header_state = HS_MATCH_UPGRADE;
-                parser->match = UPGRADE;
-                parser->i = 1;
+                lexer->header_state = HS_MATCH_UPGRADE;
+                lexer->match = UPGRADE;
+                lexer->i = 1;
                 break;
 
               case 't':
-                parser->header_state = HS_MATCH_TRANSFER_ENCODING;
-                parser->match = TRANSFER_ENCODING;
-                parser->i = 1;
+                lexer->header_state = HS_MATCH_TRANSFER_ENCODING;
+                lexer->match = TRANSFER_ENCODING;
+                lexer->i = 1;
                 break;
 
               default:
-                parser->header_state = HS_ANYTHING;
+                lexer->header_state = HS_ANYTHING;
                 break;
             }
           }
-          parser->state = S_FIELD;
+          lexer->state = S_FIELD;
         }
         break;
       }
 
       case S_FIELD_START_CR: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c == '\n') {
           HEADER_COMPLETE();
         } else {
@@ -485,47 +485,47 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_FIELD: {
-        assert(token.kind == HP2_FIELD);
+        assert(token.kind == HL_FIELD);
 
         if (c == ':') {
-          if (parser->header_state != HS_ANYTHING &&
-              parser->match[parser->i] != '\0') {
-            parser->header_state = HS_ANYTHING;
+          if (lexer->header_state != HS_ANYTHING &&
+              lexer->match[lexer->i] != '\0') {
+            lexer->header_state = HS_ANYTHING;
           }
 
           token.end = head;
           assert(token.partial == 0);
-          parser->state = S_FIELD_COLON;
+          lexer->state = S_FIELD_COLON;
           head--; /* XXX back up head... */
           goto token_complete;
         }
 
-        if (parser->header_state != HS_ANYTHING) {
+        if (lexer->header_state != HS_ANYTHING) {
           c = LOWER(c);
-          switch (parser->header_state) {
+          switch (lexer->header_state) {
             case HS_C: {
-              parser->header_state = c == 'o' ? HS_CO : HS_ANYTHING;
+              lexer->header_state = c == 'o' ? HS_CO : HS_ANYTHING;
               break;
             }
 
             case HS_CO: {
-              parser->header_state = c == 'n' ? HS_CON : HS_ANYTHING;
+              lexer->header_state = c == 'n' ? HS_CON : HS_ANYTHING;
               break;
             }
 
             case HS_CON: {
               if (c == 't') {
-                parser->header_state = HS_MATCH_CONTENT_LENGTH;
-                parser->match = CONTENT_LENGTH;
-                parser->i = 4;
+                lexer->header_state = HS_MATCH_CONTENT_LENGTH;
+                lexer->match = CONTENT_LENGTH;
+                lexer->i = 4;
                 break;
               } else if (c == 'n') {
-                parser->header_state = HS_MATCH_CONNECTION;
-                parser->match = CONNECTION;
-                parser->i = 4;
+                lexer->header_state = HS_MATCH_CONNECTION;
+                lexer->match = CONNECTION;
+                lexer->i = 4;
                 break;
               } else {
-                parser->header_state = HS_ANYTHING;
+                lexer->header_state = HS_ANYTHING;
               }
               break;
             }
@@ -534,8 +534,8 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
             case HS_MATCH_CONNECTION:
             case HS_MATCH_TRANSFER_ENCODING:
             case HS_MATCH_UPGRADE:
-              if (parser->match[parser->i++] == c) break;
-              parser->header_state = HS_ANYTHING;
+              if (lexer->match[lexer->i++] == c) break;
+              lexer->header_state = HS_ANYTHING;
               break;
 
             default:
@@ -551,54 +551,54 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_FIELD_COLON: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c != ':') goto error;
-        parser->state = S_VALUE_START;
+        lexer->state = S_VALUE_START;
         break;
       }
 
       case S_VALUE_START:
         /* Skip spaces at the beginning of values */
         if (c == ' ') break;
-        assert(token.kind == HP2_EAGAIN);
-        token.kind = HP2_VALUE;
+        assert(token.kind == HL_EAGAIN);
+        token.kind = HL_VALUE;
         token.start = head;
-        parser->state = S_VALUE;
+        lexer->state = S_VALUE;
 
-        switch (parser->header_state) {
+        switch (lexer->header_state) {
           case HS_ANYTHING:
             break;
 
           case HS_MATCH_CONTENT_LENGTH: {
-            parser->content_length = 0;
+            lexer->content_length = 0;
             break;
           }
 
           case HS_MATCH_CONNECTION: {
             c = LOWER(c);
             if (c == 'k') {
-              parser->header_state = HS_MATCH_KEEP_ALIVE;
-              parser->match = KEEP_ALIVE;
-              parser->i = 0;
+              lexer->header_state = HS_MATCH_KEEP_ALIVE;
+              lexer->match = KEEP_ALIVE;
+              lexer->i = 0;
             } else if (c == 'c') {
-              parser->header_state = HS_MATCH_CLOSE;
-              parser->match = CLOSE;
-              parser->i = 0;
+              lexer->header_state = HS_MATCH_CLOSE;
+              lexer->match = CLOSE;
+              lexer->i = 0;
             } else {
-              parser->header_state = HS_ANYTHING;
+              lexer->header_state = HS_ANYTHING;
             }
             break;
           }
 
           case HS_MATCH_UPGRADE: {
-            parser->header_state = HS_ANYTHING;
-            parser->flags |= F_UPGRADE;
+            lexer->header_state = HS_ANYTHING;
+            lexer->flags |= F_UPGRADE;
             break;
           }
 
           case HS_MATCH_TRANSFER_ENCODING: {
-            parser->match = CHUNKED;
-            parser->i = 0;
+            lexer->match = CHUNKED;
+            lexer->i = 0;
             break;
           }
 
@@ -610,29 +610,29 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_VALUE: {
         /* End of header value */
         if (c == '\r' || c == '\n') {
-          assert(token.kind == HP2_VALUE);
+          assert(token.kind == HL_VALUE);
           token.end = head;
-          parser->state = c == '\r' ? S_VALUE_CR : S_VALUE_CRLF;
+          lexer->state = c == '\r' ? S_VALUE_CR : S_VALUE_CRLF;
 
-          if (parser->header_state != HS_ANYTHING) {
-            switch (parser->header_state) {
+          if (lexer->header_state != HS_ANYTHING) {
+            switch (lexer->header_state) {
               case HS_MATCH_KEEP_ALIVE: {
-                if (parser->match[parser->i] == '\0') {
-                  parser->flags |= F_CONNECTION_KEEP_ALIVE;
+                if (lexer->match[lexer->i] == '\0') {
+                  lexer->flags |= F_CONNECTION_KEEP_ALIVE;
                 }
                 break;
               }
 
               case HS_MATCH_CLOSE: {
-                if (parser->match[parser->i] == '\0') {
-                  parser->flags |= F_CONNECTION_CLOSE;
+                if (lexer->match[lexer->i] == '\0') {
+                  lexer->flags |= F_CONNECTION_CLOSE;
                 }
                 break;
               }
 
               case HS_MATCH_TRANSFER_ENCODING: {
-                if (parser->match[parser->i] == '\0') {
-                  parser->flags |= F_TRANSFER_ENCODING_CHUNKED;
+                if (lexer->match[lexer->i] == '\0') {
+                  lexer->flags |= F_TRANSFER_ENCODING_CHUNKED;
                 }
                 break;
               }
@@ -644,21 +644,21 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         }
 
         /* header value */
-        if (parser->header_state != HS_ANYTHING) {
+        if (lexer->header_state != HS_ANYTHING) {
           c = LOWER(c);
-          switch (parser->header_state) {
+          switch (lexer->header_state) {
             case HS_MATCH_CONTENT_LENGTH: {
               if (!IS_NUMBER(c)) goto error;
-              parser->content_length *= 10;
-              parser->content_length += c - '0';
+              lexer->content_length *= 10;
+              lexer->content_length += c - '0';
               break;
             }
 
             case HS_MATCH_KEEP_ALIVE:
             case HS_MATCH_CLOSE:
             case HS_MATCH_TRANSFER_ENCODING: {
-              if (parser->match[parser->i++] != c) {
-                parser->header_state = HS_ANYTHING;
+              if (lexer->match[lexer->i++] != c) {
+                lexer->header_state = HS_ANYTHING;
               }
               break;
             }
@@ -672,31 +672,31 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       }
 
       case S_VALUE_CR: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c != '\r') goto error;
-        parser->state = S_VALUE_CRLF;
+        lexer->state = S_VALUE_CRLF;
         break;
       }
 
       case S_VALUE_CRLF: {
-        assert(token.kind == HP2_EAGAIN);
+        assert(token.kind == HL_EAGAIN);
         if (c != '\n') goto error;
-        parser->state = S_FIELD_START;
+        lexer->state = S_FIELD_START;
         break;
       }
 
       case S_IDENTITY_CONTENT: {
-        token.kind = HP2_BODY;
+        token.kind = HL_BODY;
         token.start = head;
         to_read = MIN(end - head,
-                      parser->content_length - parser->content_read);
-        parser->content_read += to_read;
+                      lexer->content_length - lexer->content_read);
+        lexer->content_read += to_read;
         head += to_read;
 
-        if (parser->content_length == parser->content_read) {
-          assert(token.kind == HP2_BODY);
+        if (lexer->content_length == lexer->content_read) {
+          assert(token.kind == HL_BODY);
           token.end = head;
-          parser->state = S_MSG_END;
+          lexer->state = S_MSG_END;
           goto token_complete;
         }
         break;
@@ -705,9 +705,9 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
       case S_CHUNK_START: {
         value = UNHEX(c);
         if (value < 0) goto error;
-        parser->chunk_read = 0;
-        parser->chunk_len = value;
-        parser->state = S_CHUNK_LEN;
+        lexer->chunk_read = 0;
+        lexer->chunk_len = value;
+        lexer->state = S_CHUNK_LEN;
         break;
       }
 
@@ -715,15 +715,15 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         value = UNHEX(c);
         if (value < 0) {
           if (c == '\r') {
-            parser->state = S_CHUNK_LEN_CRLF;
+            lexer->state = S_CHUNK_LEN_CRLF;
           } else if (IS_CHUNK_KV_CHAR(c)) {
-            parser->state = S_CHUNK_KV;
+            lexer->state = S_CHUNK_KV;
           } else {
             goto error;
           }
         } else {
-          parser->chunk_len *= 16;
-          parser->chunk_len += value;
+          lexer->chunk_len *= 16;
+          lexer->chunk_len += value;
         }
         break;
       }
@@ -733,7 +733,7 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         if (IS_CHUNK_KV_CHAR(c)) {
           ;
         } else if (c == '\r') {
-          parser->state = S_CHUNK_LEN_CRLF;
+          lexer->state = S_CHUNK_LEN_CRLF;
         } else {
           goto error;
         }
@@ -742,31 +742,31 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
       case S_CHUNK_LEN_CRLF: {
         if (c != '\n') goto error;
-        assert(parser->chunk_read == 0);
+        assert(lexer->chunk_read == 0);
 
-        if (parser->chunk_len == 0) {
+        if (lexer->chunk_len == 0) {
           /* Last chunk. There may be trailing headers. RFC 2616 14.40. */
-          parser->state = S_FIELD_START;
-          parser->flags |= F_TRAILER;
+          lexer->state = S_FIELD_START;
+          lexer->flags |= F_TRAILER;
         } else {
-          parser->state = S_CHUNK_CONTENT;
+          lexer->state = S_CHUNK_CONTENT;
         }
         break;
       }
 
       case S_CHUNK_CONTENT: {
-        assert(parser->chunk_len > 0);
-        token.kind = HP2_BODY;
+        assert(lexer->chunk_len > 0);
+        token.kind = HL_BODY;
         token.start = head;
         to_read = MIN(end - head,
-                      parser->chunk_len - parser->chunk_read);
-        parser->chunk_read += to_read;
+                      lexer->chunk_len - lexer->chunk_read);
+        lexer->chunk_read += to_read;
         head += to_read;
 
-        if (parser->chunk_len == parser->chunk_read) {
-          assert(token.kind == HP2_BODY);
+        if (lexer->chunk_len == lexer->chunk_read) {
+          assert(token.kind == HL_BODY);
           token.end = head;
-          parser->state = S_CHUNK_CONTENT_CR;
+          lexer->state = S_CHUNK_CONTENT_CR;
           goto token_complete;
         }
         break;
@@ -774,9 +774,9 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
       case S_CHUNK_CONTENT_CR: {
         if (c != '\r') goto error;
-        parser->state = S_CHUNK_CONTENT_CRLF;
+        lexer->state = S_CHUNK_CONTENT_CRLF;
         /* We shouldn't get here in the case that we're on the last chunk. */
-        assert(parser->chunk_len > 0);
+        assert(lexer->chunk_len > 0);
         break;
       }
 
@@ -784,9 +784,9 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
         if (c != '\n') goto error;
 
         /* We shouldn't get here in the case that we're on the last chunk. */
-        assert(parser->chunk_len > 0);
+        assert(lexer->chunk_len > 0);
 
-        parser->state = S_CHUNK_START;
+        lexer->state = S_CHUNK_START;
         break;
       }
     }
@@ -794,17 +794,17 @@ hp2_token hp2_parse(hp2_parser* parser, const char* data, size_t len) {
 
   token.end = head;
   token.partial = 1;
-  parser->last = token.kind;
+  lexer->last = token.kind;
   return token;
 
 token_complete:
   assert(token.partial == 0);
   assert(token.end);
-  parser->last = HP2_EAGAIN;
+  lexer->last = HL_EAGAIN;
   return token;
 
 error:
-  token.kind = HP2_ERROR;
+  token.kind = HL_ERROR;
   token.start = NULL;
   token.end = head;
   return token;
