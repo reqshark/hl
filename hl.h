@@ -9,7 +9,7 @@
  * - No syscalls - pure computation.
  * - No allocations - you own all the memory.
  * - No callbacks.
- * - Supports both request and response parsing.
+ * - Supports both request parsing (and in the future response parsing)
  * - writen in C89 standard for maximum portability.
  *
  * Not supported:
