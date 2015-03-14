@@ -1,0 +1,10 @@
+hl = http-lexer 
+
+An experimental rewrite of Node's http-parser from 2012 to not use callbacks.
+Just gonna put this out there rather than let it code rot more. This is
+incomplete and does not support response parsing yet. From an era before
+HTTP/2.0, so some significant work needs to be done to make this thing usable
+in modern web servers. But with some love I think it could be the ideal http
+parser abstraction for native client/servers. 
+
+See tests.c for example usage. Pull requests welcome.  MIT license.
