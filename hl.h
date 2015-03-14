@@ -1,16 +1,16 @@
 /* hl = HTTP Lexer
- * No syscalls - pure computation.
- * No allocations - you own all the memory.
- * No callbacks. Simplier interface.
- * Supports both request and response parsing.
  *
- * HTTP Features Supported:
- * - Full HTTP/1.1.
+ * Features:
+ * - HTTP/1.1.
  * - Keep-Alive. AKA pipelined messages.
  * - Transfer-Encoding: chunked
- * - Custom request method (http-lexer had a fixed list of methods).
  * - Trailing header.
  * - Streaming bodies.
+ * - No syscalls - pure computation.
+ * - No allocations - you own all the memory.
+ * - No callbacks.
+ * - Supports both request and response parsing.
+ * - writen in C89 standard for maximum portability.
  *
  * Not supported:
  * - headers split over multiple lines (with leading tabs)
@@ -39,7 +39,7 @@
    very uncommon. See RFC 2616 14.40.
  */
 
-enum hl_token_kind {
+typedef enum {
   HL_EAGAIN, /* Needs more input; read the next packet. */
   HL_EOF, /* Designates end of HTTP data. Do not call hl_execute() again. */
   HL_ERROR, /* Bad HTTP. Close the connection. */
@@ -53,10 +53,10 @@ enum hl_token_kind {
   HL_HEADER_END,
   HL_BODY, /* Many HL_BODY chunks may appear in a row. */
   HL_MSG_END
-};
+} hl_token_kind;
 
 typedef struct {
-  enum hl_token_kind kind;
+  hl_token_kind kind;
 
   /* start, end delimit the data - like a string. But not all tokens are
    * strings; some are just points, like HL_MSG_START, HL_HEADER_END,
@@ -77,7 +77,7 @@ typedef struct {
 typedef struct {
   /* private */
   char flags;
-  enum hl_token_kind last;
+  hl_token_kind last;
   unsigned char state;
   unsigned char header_state;
   unsigned char i;
@@ -103,13 +103,17 @@ void hl_req_init(hl_lexer* lexer);
  *
  * The hl_execute() will parse until it has one token and then return it.
  * Yes, it's copy-by-value. sizeof(hl_token) == 32 - not a big deal.
- * The lexer must be restarted repeatedly with buf = token.end. Even if
+ *
+ * hl_execute() must be restarted repeatedly with buf = token.end. Even if
  * token.end == buf + buflen, that is, zero length in the buffer remaining,
- * continue to call hl_execute() until HL_EAGAIN, HL_ERROR, or EP2_EOF is
+ *
+ * Continue to call hl_execute() until HL_EAGAIN, EP2_EOF, or HL_ERROR is
  * returned.
  *
  * If token.kind == HL_EAGAIN, the lexer has completed parsing buf and needs
  * new input. (Supplied by your next call to recv(2).)
+ *
+ * See tests.c for example usage.
  */
 hl_token hl_execute(hl_lexer* lexer, const char* buf, size_t buflen);
 
